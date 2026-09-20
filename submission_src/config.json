@@ -1,0 +1,9 @@
+{
+  "language": "id",
+  "beam_size": 5,
+  "compute_type_gpu": "float16",
+  "compute_type_cpu": "int8",
+  "condition_on_previous_text": false,
+  "vad_filter": false,
+  "temperature": 0.0
+}
