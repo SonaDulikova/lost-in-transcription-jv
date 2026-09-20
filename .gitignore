@@ -225,6 +225,7 @@ docs/
 submission_src/model/
 submission_src/*.zip
 runs/
-predictions/
+predictions/*
+!predictions/.gitkeep
 *.bin
 *.safetensors

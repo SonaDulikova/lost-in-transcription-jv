@@ -33,6 +33,13 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
 
 
 def build_transcriber(model_dir: Path, cfg: dict) -> Callable[[Path], str]:
+    # The pip CTranslate2 wheel does not bundle cuBLAS/cuDNN. Importing torch first
+    # preloads its nvidia-* wheels so ctranslate2 can dlopen libcublas.so.12 and
+    # libcudnn.so.9. Harmless on CPU and in the runtime image, which also has torch.
+    try:
+        import torch  # noqa: F401
+    except ImportError:
+        pass
     import ctranslate2
     from faster_whisper import WhisperModel
 
