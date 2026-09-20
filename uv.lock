@@ -653,6 +653,7 @@ qwen = [
 dev = [
     { name = "pytest", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "ruff", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "typer", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 
 [package.metadata]
@@ -680,6 +681,7 @@ provides-extras = ["qwen"]
 dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "ruff" },
+    { name = "typer", specifier = ">=0.27.2" },
 ]
 
 [[package]]

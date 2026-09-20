@@ -25,7 +25,11 @@ dependencies = [
 qwen = ["qwen-asr"]
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff"]
+dev = [
+    "pytest>=8",
+    "ruff",
+    "typer>=0.27.2",
+]
 
 [build-system]
 requires = ["hatchling"]
