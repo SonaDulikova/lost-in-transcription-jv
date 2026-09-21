@@ -10,6 +10,7 @@ One row per experiment. WER is dev-set corpus WER with the official normalizer.
 | B005 | 2026-09-21 | large-v3-turbo | jw | 5 | 0.2857 | 0.2925 | 0.1533 | 714.3s (372 clips, GPU float16) | fd4e291 | Javanese token hurts: I=1000 vs 307; 3 clips degenerate into number-counting loops ("2 3 3 4 4 5 5 ... 13 13 13") adding ~665 insertions; D down 1057->904; ind marginally better |
 | B006 | 2026-09-21 | large-v3 (full) | id | 5 | 0.2857 | 0.2905 | 0.1916 | 1078.9s (372 clips, GPU float16) | fd4e291 | worse than turbo on every count (S 3434 vs 3050, D 1167 vs 1057, I 394 vs 307); 2x hallucinated "Terima kasih" tails (42 vs 21 clips); 2.1x slower; 3 GB zip. Stay on turbo. |
 | B007 | 2026-09-21 | large-v3 (full) | jw | 5 | 0.2851 | 0.2898 | 0.1940 | 1292.6s (372 clips, GPU float16) | fd4e291 | same as B006 within noise; no counting loops this time but I=469. Sweep conclusion: turbo + id (B002) is the best zero-shot Whisper config. |
+| B008 | 2026-09-21 | Qwen3-ASR-1.7B | Indonesian | - | 0.2537 | 0.2590 | 0.1521 | 1734.4s (372 clips, GPU bf16, batch=1) | fd4e291 | ties turbo (+0.13 pt, not the >2 pt margin needed to switch base model); fewer deletions (D=633 vs 1057) but more insertions (I=464 vs 307); 3.4x slower per clip than turbo beam-5. Stay on Whisper turbo for the submission; keep in mind as a fine-tuning base candidate only if Whisper LoRA plateaus. |
 
 ## Error categories (B002, large-v3-turbo, lang=id, all 372 dev clips)
 
