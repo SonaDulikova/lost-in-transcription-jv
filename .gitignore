@@ -229,3 +229,4 @@ predictions/*
 !predictions/.gitkeep
 *.bin
 *.safetensors
+wandb/
