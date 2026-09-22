@@ -63,3 +63,31 @@ def split_sessions(sessions: list[str], every: int = 13) -> tuple[list[str], lis
 
 def strip_diacritics(s: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+
+
+def load_tts_tsv(path: Path, file_col: str, text_col: str) -> pd.DataFrame:
+    """Read a read-speech corpus index (one row per prompt) into columns file, text."""
+    df = pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False)
+    out = pd.DataFrame({"file": df[file_col].str.strip(), "text": df[text_col].str.strip()})
+    return out[out["text"] != ""].reset_index(drop=True)
+
+
+def group_by_duration(durations: list[float], max_seconds: float, gap: float = 0.25) -> list[list[int]]:
+    """Pack consecutive items into groups of at most max_seconds, counting gap seconds between items.
+
+    An item longer than max_seconds forms its own group.
+    """
+    groups: list[list[int]] = []
+    cur: list[int] = []
+    cur_len = 0.0
+    for i, d in enumerate(durations):
+        extra = d if not cur else gap + d
+        if cur and cur_len + extra > max_seconds:
+            groups.append(cur)
+            cur, cur_len = [], 0.0
+            extra = d
+        cur.append(i)
+        cur_len += extra
+    if cur:
+        groups.append(cur)
+    return groups

@@ -4,8 +4,10 @@ import pandas as pd
 
 from lit.data import (
     chunk_session,
+    group_by_duration,
     load_dev,
     load_jember_tsv,
+    load_tts_tsv,
     parse_hms,
     split_sessions,
     strip_diacritics,
@@ -63,3 +65,20 @@ def test_split_sessions():
 def test_strip_diacritics():
     assert strip_diacritics("Nèngdi akèh é") == "Nengdi akeh e"
     assert strip_diacritics("plain ascii") == "plain ascii"
+
+
+def test_load_tts_tsv(tmp_path: Path):
+    p = tmp_path / "t.tsv"
+    p.write_text("id\tsentence\tspeaker\na.webm\t Kuwi apa? \ts1\nb.webm\t\ts1\n")
+    df = load_tts_tsv(p, file_col="id", text_col="sentence")
+    assert df["file"].tolist() == ["a.webm"]
+    assert df["text"].tolist() == ["Kuwi apa?"]
+
+
+def test_group_by_duration_packs_consecutive_items():
+    groups = group_by_duration([4.0, 5.0, 12.0, 3.0, 25.0, 2.0], max_seconds=20.0, gap=0.25)
+    assert groups == [[0, 1], [2, 3], [4], [5]]  # 4+0.25+5 = 9.25; +12 -> 21.5 > 20
+
+
+def test_group_by_duration_empty():
+    assert group_by_duration([], max_seconds=20.0) == []
