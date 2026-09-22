@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import unicodedata
 from pathlib import Path
 
 import pandas as pd
@@ -58,3 +59,7 @@ def split_sessions(sessions: list[str], every: int = 13) -> tuple[list[str], lis
     val = [s for s in sessions if int(s) % every == 0]
     train = [s for s in sessions if s not in set(val)]
     return train, val
+
+
+def strip_diacritics(s: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")

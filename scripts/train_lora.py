@@ -24,6 +24,7 @@ from transformers import (
     WhisperProcessor,
 )
 
+from lit.data import strip_diacritics
 from lit.wer import corpus_wer
 
 SR = 16000
@@ -34,6 +35,8 @@ DEFAULT_WANDB_PROJECT = "lost-in-transcription-jv"
 def load_manifests(paths: list[Path], max_seconds: float = 30.0, limit: int | None = None) -> pd.DataFrame:
     df = pd.concat([pd.read_csv(p, keep_default_na=False) for p in paths], ignore_index=True)
     df = df[(df["duration"] <= max_seconds) & (df["text"].str.strip() != "")]
+    # Jember writes è/é heavily, dev references almost never do; the scorer keeps diacritics as-is
+    df["text"] = df["text"].map(strip_diacritics)
     if limit:
         df = df.sample(n=min(limit, len(df)), random_state=0)
     return df.reset_index(drop=True)

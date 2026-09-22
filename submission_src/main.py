@@ -11,8 +11,9 @@ import json
 import os
 import sys
 import time
+import unicodedata
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import polars as pl
 
@@ -30,6 +31,12 @@ def log(msg: str) -> None:
 def load_config(path: Path = CONFIG_PATH) -> dict:
     with open(path) as f:
         return json.load(f)
+
+
+def postprocess(text: str) -> str:
+    # References are written without diacritics (nèng -> neng); the scorer keeps them, so
+    # every accented word a Jember-tuned model emits would count as a substitution.
+    return "".join(c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn")
 
 
 def build_transcriber(model_dir: Path, cfg: dict) -> Callable[[Path], str]:
@@ -58,7 +65,7 @@ def build_transcriber(model_dir: Path, cfg: dict) -> Callable[[Path], str]:
             condition_on_previous_text=cfg.get("condition_on_previous_text", False),
             vad_filter=cfg.get("vad_filter", False),
         )
-        return " ".join(s.text.strip() for s in segments).strip()
+        return postprocess(" ".join(s.text.strip() for s in segments).strip())
 
     return transcribe
 

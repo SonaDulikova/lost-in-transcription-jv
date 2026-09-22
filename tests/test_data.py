@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pandas as pd
 
-from lit.data import chunk_session, load_dev, load_jember_tsv, parse_hms, split_sessions
+from lit.data import (
+    chunk_session,
+    load_dev,
+    load_jember_tsv,
+    parse_hms,
+    split_sessions,
+    strip_diacritics,
+)
 
 
 def test_load_dev(tmp_path: Path):
@@ -51,3 +58,8 @@ def test_split_sessions():
     train, val = split_sessions([str(i) for i in range(1, 30)], every=13)
     assert val == ["13", "26"]
     assert "13" not in train and len(train) == 27
+
+
+def test_strip_diacritics():
+    assert strip_diacritics("Nèngdi akèh é") == "Nengdi akeh e"
+    assert strip_diacritics("plain ascii") == "plain ascii"

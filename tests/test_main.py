@@ -33,6 +33,13 @@ def test_run_writes_submission_in_format_order(tmp_path: Path):
     assert df["transcript"].tolist() == ["text for b.mp3", "text for a.mp3"]
 
 
+def test_postprocess_strips_diacritics_only():
+    m = _load_main()
+    assert m.postprocess("Nèngdi akèh, é... ya.") == "Nengdi akeh, e... ya."
+    assert m.postprocess("Kalau di SMP, ya.") == "Kalau di SMP, ya."
+    assert m.postprocess("") == ""
+
+
 def test_run_survives_transcriber_error(tmp_path: Path):
     m = _load_main()
     data = tmp_path / "data"
