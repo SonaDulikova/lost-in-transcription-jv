@@ -81,4 +81,26 @@ v2 wins by 4.6 pt over zero-shot and improves both languages; oversampling convo
 
 Post-processing check on v2 convo-2 output (Task 12 step 4): case rule 0.1834 -> 0.1853 (hurts: the tuned model already follows the reference casing), strip trailing `terima kasih`/`bye` -0.1 pt (4 words), strip leading `hai` 0, digits: none emitted. Only the diacritics strip stays in `main.py`.
 
+### Decoding sweep on v2 (Task 12 step 3, convo 2, CT2)
+
+| config | WER all | ind | javind | S/D/I |
+|---|---|---|---|---|
+| beam 1 | 0.1912 | 0.1405 | 0.2074 | 566/60/54 |
+| beam 5 (kept, `config.json` default) | 0.1834 | 0.1336 | 0.1993 | 545/55/52 |
+| beam 8 | 0.1839 | 0.1278 | 0.2019 | 546/54/54 |
+| beam 5 + condition_on_previous_text=true | 0.1960 | 0.1289 | 0.2174 | 540/52/105 |
+
+Beam 5 stays; beam 8 ties within noise at 60% more decode time, and `condition_on_previous_text=true` nearly doubles insertions (52->105, cross-segment echo/drift). `config.json` unchanged. `submission_src/model` now holds `lora_v2`'s CT2 weights (moved zero-shot weights to `runs/ct2/turbo_zeroshot` first).
+
+## Freeze (Task 13, 2026-09-22)
+
+Final submission = `submission_src` as of this commit: large-v3-turbo + `lora_turbo_v2` merged, CT2 float16, `config.json` unchanged (lang `id`, beam 5, no conditioning, no VAD), `postprocess` strips diacritics. Expected dev WER 0.1834 on convo 2 (in-training convo 5 makes full-dev numbers meaningless for this model).
+
+Validation before upload: `uv run pytest -q` 24 passed; `scripts/pack.sh --run --small 10` VALIDATION PASSED, zip 1.6 GB (sha256 prefix `4103bd1066ffbaf8`), official image on CPU int8 wrote 10 rows, 0 failures, 119 s. Local Docker cannot use the GPU: the image is CUDA 13 and the host Windows driver 566 (CUDA 12.7) is refused by the NVIDIA container hook; with the check bypassed CTranslate2 still sees 0 CUDA devices. The GPU float16 path is only exercised by the platform smoke test, so check its log for `on cuda (float16)` before the full run.
+
+| date | id | type | score | notes |
+|---|---|---|---|---|
+| pending | | smoke test | | upload `~/repos/lost-in-transcription-runtime/submission/submission.zip`; confirm GPU float16 and runtime well under 2 h |
+| pending | | full evaluation (lora_v2) | | compare with baseline 0.4697; tag `final-v1` |
+
 Both v1 and v2/v3 were trained with Jember's diacritics in the targets (`nèng`, `akèh`); the in-training val WERs above therefore include diacritic substitutions and are only comparable to each other, not to `scripts/score.py` numbers. Fixed 2026-09-22 for future runs: `load_manifests` in `scripts/train_lora.py` now strips diacritics from training text (`lit.data.strip_diacritics`); v2/v3 loaded the old code before the fix. At inference, `submission_src/main.py` now applies `postprocess` (strip diacritics) inside `transcribe`; it is a no-op on the zero-shot model's output and worth -5 pt on Jember-tuned models. Honest comparison of zero-shot / v1 / v2 / v3 on convo 2 (beam 5, CT2, diacritics stripped) is in `predictions/C2_comparison.txt` once `runs/overnight2.sh` finishes.
