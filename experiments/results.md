@@ -53,10 +53,14 @@ Submission zip = `submission_src` packed by `scripts/pack.sh` (large-v3-turbo, l
 
 | date | id | type | score | notes |
 |---|---|---|---|---|
-| 2026-09-21 | id-2277 | smoke test | 0.2304 | ran and scored on the platform's smoke subset |
+| 2026-09-21 | id-2277 | smoke test | 0.2304 | ran and scored on the platform's smoke subset (zero-shot baseline zip) |
 | 2026-09-21 | id-2278 | full evaluation (baseline) | 0.4697 (public score), rank #90 | 1 of 3 weekly submissions used; next submission available 2026-09-21 UTC |
+| 2026-09-22 | id-2350 | smoke test | 0.1609 | lora_v2 (Jember + convo 5) zip; does not count against the weekly quota |
+| 2026-09-22 | id-2353 | full evaluation (lora_v2, Jember + convo 5) | 0.2780 (public score), rank #35 | 2 of 3 weekly submissions used; 1 left, next available 2026-09-22 UTC |
 
 Leaderboard public score (0.4697) is far worse than dev corpus WER (B003: 0.2544 all, Docker CPU int8 — the same zip). Either the hidden test set is harder/more mismatched than dev, or the platform's WER computation differs from `lit.wer`/`third_party/score.py` in some way not yet identified. Needs investigation before using dev WER deltas as a reliable proxy for leaderboard deltas.
+
+lora_v2's full evaluation (0.2780) is -0.1917 vs the baseline (0.4697) and moves rank #90 -> #35. The smoke-test score improved by roughly the same margin (0.2304 -> 0.1609, -0.0695), so the smoke subset direction at least agrees with the full leaderboard result, even though its absolute level is not close to the full-evaluation score.
 
 Scorer check (2026-09-21): `third_party/score.py` computes `jiwer.wer(normalized_refs, normalized_preds)` over all rows, i.e. corpus WER, the same as `lit.wer.corpus_wer`, and `tests/test_normalize.py` proves the normalizer matches. So the gap is not a scoring mismatch; the hidden test set is harder than dev (likely more Javanese-heavy or a different speaker mix). Dev deltas should still rank configurations, but the absolute level will not transfer.
 
@@ -100,8 +104,8 @@ Validation before upload: `uv run pytest -q` 24 passed; `scripts/pack.sh --run -
 
 | date | id | type | score | notes |
 |---|---|---|---|---|
-| pending | | smoke test | | upload `~/repos/lost-in-transcription-runtime/submission/submission.zip`; confirm GPU float16 and runtime well under 2 h |
-| pending | | full evaluation (lora_v2) | | compare with baseline 0.4697; tag `final-v1` |
+| 2026-09-22 | id-2350 | smoke test | 0.1609 | uploaded `~/repos/lost-in-transcription-runtime/submission/submission.zip`; completed in 1h17min |
+| 2026-09-22 | id-2353 | full evaluation (lora_v2) | 0.2780 (public score), rank #35 | -0.1917 vs baseline 0.4697; completed in 31min, well under 2h; tag `final-v1` |
 
 Both v1 and v2/v3 were trained with Jember's diacritics in the targets (`nèng`, `akèh`); the in-training val WERs above therefore include diacritic substitutions and are only comparable to each other, not to `scripts/score.py` numbers. Fixed 2026-09-22 for future runs: `load_manifests` in `scripts/train_lora.py` now strips diacritics from training text (`lit.data.strip_diacritics`); v2/v3 loaded the old code before the fix. At inference, `submission_src/main.py` now applies `postprocess` (strip diacritics) inside `transcribe`; it is a no-op on the zero-shot model's output and worth -5 pt on Jember-tuned models. Honest comparison of zero-shot / v1 / v2 / v3 on convo 2 (beam 5, CT2, diacritics stripped) is in `predictions/C2_comparison.txt` once `runs/overnight2.sh` finishes.
 
@@ -112,5 +116,17 @@ Marker-word counts on the transcripts show the dev set is Central Javanese while
 Jember is hosted on MDC (Universitas Gadjah Mada, CC-BY-NC-SA-4.0), so the DrivenData reminder of 2026-09-22 about publishing non-MDC training data does not apply to the current submission.
 
 **Central Javanese corpus** = MDC "TTS Central Javanese" (`mozilladatacollective.com/datasets/cml5bn4k900aame07u0rwidcg`, CC-BY-SA-4.0, Semarang-dialect ngoko read speech, everyday topics). Downloaded 2026-09-22 as `RECORDING TTS.tar.gz` (461 MB, a tar of one zip of 92 zips). Layout after extraction: 92 folders `recordings (N)`, each with `mapping.tsv` (columns `audio_filename`, `sentence`) and about 50 Opus WEBM clips (48 kHz mono, about 6.5 s each) named by hash; one nested zip in folder 11 was a byte-identical duplicate of folder 3 and was deleted. Inventory: 4,579 mapping rows, 4,549 clips on disk, 30 rows without a file, 60 rows with empty text; all kept rows resolve, no duplicate ids, 59 duplicate sentences (recorded by different readers). Flattened into `data/central_jv/audio/` (hardlinks) plus one `data/central_jv/mapping.tsv` with 4,519 rows, so `prepare_tts.py --tsv data/central_jv/mapping.tsv --audio-dir data/central_jv/audio --file-col audio_filename --text-col sentence` works without layout code.
+
+Manifest built 2026-09-22 with `uv run scripts/prepare_tts.py --tsv data/central_jv/mapping.tsv --audio-dir data/central_jv/audio --file-col audio_filename --text-col sentence` (defaults: max 20 s per chunk, 0.25 s silence between packed sentences, session label `cjv`). All 4,519 clips decoded, 0 failures. Result: **1,744 chunks, 7.97 h**, mean chunk 16.5 s, max 20.0 s, 2.6 sentences per chunk, longest target 53 words. Spot-checked chunks are 16 kHz with rms 0.07-0.09 and peak below 0.8. Packing arithmetic verified on a 20-clip dry run: 132.6 s packed = 129.6 s raw + 12 joins x 0.25 s. Disk: 880 MB `data/central_jv/wav` (chunks) + 864 MB `wav_raw` (per-sentence cache, safe to delete after training).
+
+Training mixes this enables, via `load_manifests`:
+
+| mix | chunks | hours |
+|---|---|---|
+| Jember train | 1568 | 9.04 |
+| dev convo 5 | 270 | 1.84 |
+| Central Javanese | 1744 | 7.97 |
+| v4 = Jember + convo 5 + Central Javanese | 3582 | 18.85 |
+| v5 = convo 5 + Central Javanese | 2014 | 9.81 |
 
 Text conventions: plain ASCII, no diacritics, sentence-case with final `.`/`?`/`!` on 99% of rows, mean 13 words (max 37), no `...` tokens, 41 rows with digits. Dialect check over 61k tokens: Central markers `iku` 1922, `ning` 1713, `ora` 966, `kuwi` 783, `yo` 528, `wae` 255, `opo` 246; East markers `nang` 1, `ae` 0, `kate` 0, `sampeyan` 0. Semarang spellings with `o` (`okeh`, `seko`, `mergo`, `utowo`, `wes`). Indonesian code-mixing is light (`dan` 10, `juga` 21). So it matches the dev dialect but not its register: no hesitations, no Indonesian stretches, one or few readers. Expect it to help vocabulary and spelling, not acoustics; convo 5 stays in training for register.
