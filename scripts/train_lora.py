@@ -32,13 +32,13 @@ LANG_NAMES = {"id": "indonesian", "jw": "javanese"}
 DEFAULT_WANDB_PROJECT = "lost-in-transcription-jv"
 
 
-def load_manifests(paths: list[Path], max_seconds: float = 30.0, limit: int | None = None) -> pd.DataFrame:
+def load_manifests(paths: list[Path], max_seconds: float = 30.0, limit: int | None = None, seed: int = 0) -> pd.DataFrame:
     df = pd.concat([pd.read_csv(p, keep_default_na=False) for p in paths], ignore_index=True)
     df = df[(df["duration"] <= max_seconds) & (df["text"].str.strip() != "")]
     # Jember writes è/é heavily, dev references almost never do; the scorer keeps diacritics as-is
     df["text"] = df["text"].map(strip_diacritics)
     if limit:
-        df = df.sample(n=min(limit, len(df)), random_state=0)
+        df = df.sample(n=min(limit, len(df)), random_state=seed)
     return df.reset_index(drop=True)
 
 
@@ -99,6 +99,7 @@ def main() -> None:
     ap.add_argument("--rank", type=int, default=32)
     ap.add_argument("--val-limit", type=int, default=150)
     ap.add_argument("--train-limit", type=int, default=None, help="subsample for dry runs")
+    ap.add_argument("--sample-seed", type=int, default=0, help="random_state for --train-limit subsampling")
     ap.add_argument("--no-augment", action="store_true")
     ap.add_argument("--wandb-project", default=DEFAULT_WANDB_PROJECT)
     ap.add_argument("--run-name", default=None)
@@ -131,7 +132,7 @@ def main() -> None:
     model.enable_input_require_grads()
     model.print_trainable_parameters()
 
-    train_df = load_manifests(args.train, limit=args.train_limit)
+    train_df = load_manifests(args.train, limit=args.train_limit, seed=args.sample_seed)
     val_df = load_manifests([args.val], limit=args.val_limit)
     print(f"train {len(train_df)} chunks ({train_df['duration'].sum() / 3600:.2f} h), val {len(val_df)}")
     train_ds = Dataset.from_pandas(train_df[["path", "text"]])

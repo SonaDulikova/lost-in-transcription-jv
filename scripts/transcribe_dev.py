@@ -33,6 +33,11 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--convo", type=int, default=None)
     ap.add_argument("--dev-dir", type=Path, default=DEV_DIR)
+    ap.add_argument("--temperature", type=float, default=None)
+    ap.add_argument("--patience", type=float, default=None)
+    ap.add_argument("--condition-on-previous-text", action="store_true")
+    ap.add_argument("--vad-filter", action="store_true")
+    ap.add_argument("--no-postprocess", action="store_true", help="write raw model output; rules are applied at scoring time")
     args = ap.parse_args()
 
     df = load_dev(args.dev_dir)
@@ -46,6 +51,16 @@ def main() -> None:
         m = load_main()
         cfg = m.load_config()
         cfg.update({"language": language, "beam_size": args.beam})
+        if args.temperature is not None:
+            cfg["temperature"] = args.temperature
+        if args.patience is not None:
+            cfg["patience"] = args.patience
+        if args.condition_on_previous_text:
+            cfg["condition_on_previous_text"] = True
+        if args.vad_filter:
+            cfg["vad_filter"] = True
+        if args.no_postprocess:
+            cfg["postprocess"] = []
         transcribe = m.build_transcriber(args.model, cfg)
     else:
         from lit.hf_infer import build_hf_transcriber
@@ -60,6 +75,10 @@ def main() -> None:
     pd.DataFrame({"audio_filename": df["audio_filename"], "transcript": hyps}).to_csv(args.out, index=False)
     meta = {"model": str(args.model), "backend": args.backend, "language": args.language,
             "beam": args.beam, "n": len(df), "seconds": round(elapsed, 1)}
+    if args.backend == "ct2":
+        meta.update({"temperature": args.temperature, "patience": args.patience,
+                     "condition_on_previous_text": args.condition_on_previous_text,
+                     "vad_filter": args.vad_filter, "postprocess": not args.no_postprocess})
     args.out.with_suffix(".json").write_text(json.dumps(meta, indent=2))
     print(json.dumps(meta))
 
