@@ -28,6 +28,7 @@ qwen = ["qwen-asr"]
 
 [dependency-groups]
 dev = [
+    "num2words>=0.5.14",
     "pytest>=8",
     "ruff",
     "typer>=0.27.2",
