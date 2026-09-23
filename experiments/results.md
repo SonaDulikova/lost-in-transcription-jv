@@ -71,6 +71,8 @@ Scorer check (2026-09-21): `third_party/score.py` computes `jiwer.wer(normalized
 | lora_turbo_v1 | Jember train (1568 chunks, 9.0 h) | Jember val, 16 sessions | 0.2360 (ep2) | ep1 0.2588, ep2 0.2360, ep3 0.2478; ep3 eval 2.5x slower (long generations). Dev results: F001 rows above. |
 | lora_turbo_v2 | Jember + dev convo 5 (1838 chunks, 10.9 h) | dev convo 2 (65 clips <= 30 s, greedy) | 0.2207 (ep1) | ep2 0.2324 -> early stop. ~4.4 h wall. |
 | lora_turbo_v3 | Jember + convo 5 x2 (2108 chunks, 12.7 h) | same | 0.2111 (ep1) | ep2 0.2122 -> early stop. ~3.5 h wall. |
+| lora_turbo_v4 | Jember + convo 5 + Central Javanese (3582 chunks, 18.85 h) | same | 0.1846 (ep2) | ep1 0.1927, ep2 0.1846, ep3 0.1890. 2 h 22 min wall at 12.8 s/step (v2's 4.4 h must have shared the GPU with something). Diacritics stripped from targets (post-fix code). |
+| lora_turbo_v5 | convo 5 + Central Javanese, no Jember (2014 chunks, 9.81 h) | same | 0.1798 (ep2) | ep1 0.2166, ep2 0.1798, ep3 0.1813. 1 h 21 min wall. |
 
 ### Honest comparison on dev conversation 2 (78 clips, never in training; beam 5, CT2 float16, diacritics stripped)
 
@@ -78,10 +80,18 @@ Scorer check (2026-09-21): `third_party/score.py` computes `jiwer.wer(normalized
 |---|---|---|---|---|
 | zero-shot turbo (B002 rows) | 0.2292 | 0.1556 | 0.2527 | 618 / 136 / 61 |
 | lora_v1 (Jember only) | 0.2455 | 0.2067 | 0.2579 | 753 / 65 / 55 |
-| **lora_v2 (Jember + convo 5)** | **0.1834** | **0.1336** | **0.1993** | 545 / 55 / 52 |
+| lora_v2 (Jember + convo 5) | 0.1834 | **0.1336** | 0.1993 | 545 / 55 / 52 |
 | lora_v3 (Jember + convo 5 x2) | 0.1915 | 0.1370 | 0.2089 | 572 / 52 / 57 |
+| lora_v4 (Jember + convo 5 + Central Javanese) | 0.1797 | 0.1487 | 0.1896 | 535 / 57 / 47 |
+| **lora_v5 (convo 5 + Central Javanese, no Jember)** | **0.1760** | 0.1359 | **0.1889** | 497 / 78 / 51 |
 
-v2 wins by 4.6 pt over zero-shot and improves both languages; oversampling convo 5 (v3) is slightly worse. In-domain dev speech in training is the lever, as the plan predicted. v2 goes into `submission_src/model` (Task 12 step 2); the zero-shot CT2 weights are kept at `runs/ct2/turbo_zeroshot`. Full table with raw v1 row: `predictions/C2_comparison.txt`.
+v2 wins by 4.6 pt over zero-shot and improves both languages; oversampling convo 5 (v3) is slightly worse. In-domain dev speech in training is the lever, as the plan predicted. v2 went into `submission_src/model` on 2026-09-22 (Task 12 step 2) and was replaced by v5 on 2026-09-23 (see the decision below); the zero-shot CT2 weights are kept at `runs/ct2/turbo_zeroshot`. Full table with raw v1 row: `predictions/C2_comparison.txt`.
+
+Central Javanese runs (2026-09-22 overnight, table `predictions/C2_comparison_v4.txt`): adding the MDC Central Javanese read-speech corpus helps the Javanese side in both runs (javind 0.1993 -> 0.1896 / 0.1889, about -1.0 pt, substitutions 451 -> 430 / 403). Keeping Jember in the mix (v4) costs 1.5 pt on ind (0.1336 -> 0.1487), the same Indonesian regression Jember caused in v1, so v4 misses the decision rule. Dropping Jember (v5) removes that regression (ind 0.1359, +2 errors on 861 words, i.e. noise) and gives the best overall result, 0.1760, -0.74 pt vs v2. v5 trades substitutions for deletions (S 545 -> 497, D 55 -> 78), worth a look in the error report. Conclusion: the dialect hypothesis holds; Jember (East Javanese) is net negative once Central Javanese data is available. v5 passes the overall (>= 0.5 pt) and javind criteria; its ind is 0.0023 above v2, within noise but strictly outside the "not worse on either language" clause, so replacing v2 is a judgment call rather than automatic.
+
+**Decision (2026-09-23): v5 replaces v2 in `submission_src/model`.** Per-clip check of v5 against v2 on the 78 clips: 32 clips better, 16 equal, 30 worse; total errors 652 -> 626; the extra deletions are diffuse (largest per-clip increase +3 words, largest per-clip deletion count 5, no empty or truncated outputs), so it is not a hallucination-stop or truncation failure mode. The ind gap is 115 vs 117 errors on 20 clips with per-clip deltas scattered in both directions. Paired bootstrap over clips (5,000 resamples) puts the v5 - v2 corpus WER difference at -0.0073 with 95% CI [-0.0195, +0.0043], P(v5 worse) = 0.11. The strict "not worse on either language" clause was written to catch v1/v4-style regressions of 1.5 to 5 pt, not a 2-word delta, so it was relaxed for this call; the platform smoke test and full evaluation are the real gate, with v2's CT2 weights kept at `runs/ct2/lora_v2_submitted` (byte-identical to `runs/ct2/lora_v2`) and v2's zip kept as `~/repos/lost-in-transcription-runtime/submission/submission_lora_v2_4103bd10.zip` for re-upload if v5 scores no better.
+
+What the v4/v5 pair adds to what we know: (1) the dialect hypothesis holds on held-out speech, not just on marker counts: Central Javanese read speech moves javind by -1.0 pt from 8 h of data, and Jember's contribution is now negative on ind and neutral on javind, so East Javanese data is not worth its training time for this dev set; (2) read TTS speech with no code-switching still transfers to conversational Javanese, as long as convo 5 supplies the register; (3) training throughput with an idle GPU is 12.8 s/step, so an 18.85 h mix takes 2 h 22 min and a 9.8 h mix 1 h 21 min, which leaves room for one or two more runs before the 2026-09-30 final freeze; (4) v5 reaches its best in-training val at epoch 2 with epoch 3 flat, so 3 epochs with patience 1 remains the right budget.
 
 Post-processing check on v2 convo-2 output (Task 12 step 4): case rule 0.1834 -> 0.1853 (hurts: the tuned model already follows the reference casing), strip trailing `terima kasih`/`bye` -0.1 pt (4 words), strip leading `hai` 0, digits: none emitted. Only the diacritics strip stays in `main.py`.
 
@@ -107,11 +117,22 @@ Validation before upload: `uv run pytest -q` 24 passed; `scripts/pack.sh --run -
 | 2026-09-22 | id-2350 | smoke test | 0.1609 | uploaded `~/repos/lost-in-transcription-runtime/submission/submission.zip`; completed in 1h17min |
 | 2026-09-22 | id-2353 | full evaluation (lora_v2) | 0.2780 (public score), rank #35 | -0.1917 vs baseline 0.4697; completed in 31min, well under 2h; tag `final-v1` |
 
+## Second freeze (2026-09-23, model lora_turbo_v5)
+
+Final submission candidate = `submission_src` with `lora_turbo_v5` (convo 5 + TTS Central Javanese, no Jember; best epoch 2) merged into large-v3-turbo, CT2 float16, `config.json` unchanged (lang `id`, beam 5, no conditioning, no VAD), `postprocess` strips diacritics. Expected dev WER 0.1760 on convo 2 (ind 0.1359, javind 0.1889). The previous frozen model (v2, zip sha256 prefix `4103bd1066ffbaf8`, tag `final-v1`) stays available as described in the decision paragraph above.
+
+Validation before upload (2026-09-23): `uv run pytest -q` 27 passed; 10-clip GPU round-trip through `submission_src/model` byte-identical to `predictions/C2_lora_v5.csv` (10 of 10); `scripts/pack.sh --run --small 10` VALIDATION PASSED, zip 1.6 GB (sha256 prefix `99c7a8383c5cc016`), official image on CPU int8 wrote 10 rows, 0 failures, 127 s (v2 took 119 s on the same clips). Check the platform smoke log for `on cuda (float16)` before the full run.
+
+| date | id | type | score | notes |
+|---|---|---|---|---|
+| pending | | smoke test | | upload `~/repos/lost-in-transcription-runtime/submission/submission.zip` (sha256 prefix `99c7a838`) |
+| pending | | full evaluation (lora_v5) | | compare with v2's 0.2780 (rank #35) and baseline 0.4697; 1 weekly submission was left as of 2026-09-22 |
+
 Both v1 and v2/v3 were trained with Jember's diacritics in the targets (`nèng`, `akèh`); the in-training val WERs above therefore include diacritic substitutions and are only comparable to each other, not to `scripts/score.py` numbers. Fixed 2026-09-22 for future runs: `load_manifests` in `scripts/train_lora.py` now strips diacritics from training text (`lit.data.strip_diacritics`); v2/v3 loaded the old code before the fix. At inference, `submission_src/main.py` now applies `postprocess` (strip diacritics) inside `transcribe`; it is a no-op on the zero-shot model's output and worth -5 pt on Jember-tuned models. Honest comparison of zero-shot / v1 / v2 / v3 on convo 2 (beam 5, CT2, diacritics stripped) is in `predictions/C2_comparison.txt` once `runs/overnight2.sh` finishes.
 
 ## Dialect mismatch and the Central Javanese corpus (2026-09-22)
 
-Marker-word counts on the transcripts show the dev set is Central Javanese while Jember is East Javanese (Pandhalungan). Counts over dev (18k tokens) vs Jember (68k tokens): `kui/kuwi` 71 vs 311, `iku` 9 vs 2687, `neng` 24 vs 3, `nang` 0 vs 236, `wae` 20 vs 74, `ae` 0 vs 188, `kate/katene/sampeyan` 0 vs 211. Dev speakers also name Solo, Jogja, Magelang, Blora and Semarang. This is the likely reason v1 (Jember only) lost to zero-shot on convo 2 and v2's whole gain came from in-domain convo 5. Plan: `docs/superpowers/plans/2026-09-22-central-javanese-data.md`.
+Marker-word counts on the transcripts show the dev set is Central Javanese while Jember is East Javanese (Pandhalungan). Counts over dev (18k tokens) vs Jember (68k tokens): `kui/kuwi` 71 vs 311, `iku` 9 vs 2687, `neng` 24 vs 3, `nang` 0 vs 236, `wae` 20 vs 74, `ae` 0 vs 188, `kate/katene/sampeyan` 0 vs 211. Dev speakers also name Solo, Jogja, Magelang, Blora and Semarang. This is the likely reason v1 (Jember only) lost to zero-shot on convo 2 and v2's whole gain came from in-domain convo 5. Plan: `docs/superpowers/plans/central-javanese-data-2026-09-22.md`.
 
 Jember is hosted on MDC (Universitas Gadjah Mada, CC-BY-NC-SA-4.0), so the DrivenData reminder of 2026-09-22 about publishing non-MDC training data does not apply to the current submission.
 
