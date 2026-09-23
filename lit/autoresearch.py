@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -194,7 +196,9 @@ def gpu_busy() -> bool:
 
 
 def _opt(args: list[str], flag: str, default: str) -> str:
-    return args[args.index(flag) + 1] if flag in args else default
+    if flag in args and args.index(flag) + 1 < len(args):
+        return args[args.index(flag) + 1]
+    return default
 
 
 def decode_cmd(model: Path, out_csv: Path, cfg: dict) -> list[str]:
@@ -226,3 +230,85 @@ def train_cmd(run_id: str, train_args: list[str], out: Path, proxy: bool, dry: b
 def export_cmd(train_args: list[str], adapter: Path, out: Path) -> list[str]:
     return UV + ["scripts/export_ct2.py", "--base", _opt(train_args, "--base", DEFAULT_BASE),
                  "--adapter", str(adapter), "--out", str(out)]
+
+
+def _finish(store: Store, row: dict) -> dict:
+    store.append(row)
+    print(json.dumps(row, ensure_ascii=False))
+    return row
+
+
+def run_postproc(store: Store, predictions: Path, rules: Sequence[str], hypothesis: str | None) -> dict:
+    run_id = store.next_id("postproc")
+    config = {"predictions": str(predictions), "rules": list(rules)}
+    t0 = time.time()
+    try:
+        metrics = score_convo(predictions, rules)
+        pred = pd.read_csv(predictions, keep_default_na=False)
+        pred["transcript"] = pred["transcript"].map(lambda t: apply(t, rules))
+        store.predictions.mkdir(parents=True, exist_ok=True)
+        pred.to_csv(store.predictions / f"{run_id}.csv", index=False)
+        row = make_row(run_id, "postproc", config, hypothesis, "ok", time.time() - t0, metrics)
+    except Exception as e:  # noqa: BLE001 - a bad rule set is a data point, not a crash of the loop
+        row = make_row(run_id, "postproc", config, hypothesis, "crash", time.time() - t0, error=f"{type(e).__name__}: {e}")
+    return _finish(store, row)
+
+
+def _score_or_error(csv: Path, rules: Sequence[str]) -> tuple[dict | None, str | None]:
+    try:
+        return score_convo(csv, rules), None
+    except Exception as e:  # noqa: BLE001
+        return None, f"scoring: {type(e).__name__}: {e}"
+
+
+def _run_or_error(runner, cmd, log, budget) -> tuple[str, str | None]:
+    try:
+        status, _rc, tail = runner(cmd, log, budget)
+        return status, (tail if status != "ok" else None)
+    except Exception as e:  # noqa: BLE001 - a runner that cannot start is a crash row, not a lost run
+        return "crash", f"{type(e).__name__}: {e}"
+
+
+def run_decode(store: Store, model: Path, cfg: dict, rules: Sequence[str], hypothesis: str | None,
+               runner=run_logged) -> dict:
+    run_id = store.next_id("decode")
+    config = {"model": str(model), **cfg, "rules": list(rules)}
+    out_csv = store.predictions / f"{run_id}.csv"
+    t0 = time.time()
+    status, tail = _run_or_error(runner, decode_cmd(model, out_csv, cfg), store.logs / f"{run_id}.log", BUDGET_S["decode"])
+    metrics, error = (None, tail) if status != "ok" else _score_or_error(out_csv, rules)
+    if error and status == "ok":
+        status = "crash"
+    return _finish(store, make_row(run_id, "decode", config, hypothesis, status, time.time() - t0, metrics, error))
+
+
+def run_train(store: Store, train_args: list[str], mode: str, hypothesis: str | None,
+              runner=run_logged, runs_dir: Path = REPO / "runs") -> dict:
+    run_id = store.next_id("train")
+    rules = ["diacritics"]
+    config = {"mode": mode, "train_args": list(train_args), "decode": DEFAULT_DECODE, "rules": rules}
+    out, ct2 = runs_dir / run_id, runs_dir / "ct2" / run_id
+    out_csv = store.predictions / f"{run_id}.csv"
+    log = store.logs / f"{run_id}.log"
+    budget = BUDGET_S["full" if mode == "full" else "proxy"]
+    t0 = time.time()
+    steps = [
+        ("train_lora", train_cmd(run_id, train_args, out, proxy=mode != "full", dry=mode == "dry")),
+        ("export_ct2", export_cmd(train_args, out / "adapter", ct2)),
+        ("transcribe_dev", decode_cmd(ct2, out_csv, DEFAULT_DECODE)),
+    ]
+    status, error, metrics = "ok", None, None
+    for name, cmd in steps:
+        remaining = max(budget - (time.time() - t0), 1.0)
+        status, tail = _run_or_error(runner, cmd, log, remaining)
+        if status != "ok":
+            error = f"{name} {status}: {tail[-2000:]}"
+            break
+    if status == "ok":
+        metrics, error = _score_or_error(out_csv, rules)
+        if error:
+            status = "crash"
+    if mode != "full":
+        shutil.rmtree(out, ignore_errors=True)
+        shutil.rmtree(ct2, ignore_errors=True)
+    return _finish(store, make_row(run_id, "train", config, hypothesis, status, time.time() - t0, metrics, error))

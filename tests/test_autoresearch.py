@@ -151,3 +151,125 @@ def test_export_cmd_uses_base_from_train_args():
     assert cmd[cmd.index("--base") + 1] == "openai/whisper-large-v3"
     cmd = export_cmd(["--train", "x.csv"], Path("a"), Path("b"))
     assert cmd[cmd.index("--base") + 1] == "openai/whisper-large-v3-turbo"
+
+
+def test_export_cmd_falls_back_when_base_has_no_value():
+    cmd = export_cmd(["--train", "x.csv", "--base"], Path("a"), Path("b"))
+    assert cmd[cmd.index("--base") + 1] == "openai/whisper-large-v3-turbo"
+
+
+import shutil
+
+from lit.autoresearch import run_decode, run_postproc, run_train
+
+
+def _fake_runner_factory(dev_dir: Path, fail_step: str | None = None):
+    """Stands in for run_logged: writes a perfect predictions CSV when a decode command runs."""
+    calls: list[list[str]] = []
+
+    def runner(cmd, log_path, budget_s):
+        calls.append(cmd)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("fake log\nlast line\n")
+        script = cmd[2]
+        if fail_step and fail_step in script:
+            return "crash", 1, "boom"
+        if script == "scripts/transcribe_dev.py":
+            out = Path(cmd[cmd.index("--out") + 1])
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text("audio_filename,transcript\na.mp3,aku iso ya\nb.mp3,neng kene\n")
+        if script == "scripts/train_lora.py":
+            adapter = Path(cmd[cmd.index("--out") + 1]) / "adapter"
+            adapter.mkdir(parents=True, exist_ok=True)
+            (adapter / "adapter_model.safetensors").write_bytes(b"")
+        if script == "scripts/export_ct2.py":
+            Path(cmd[cmd.index("--out") + 1]).mkdir(parents=True, exist_ok=True)
+        return "ok", 0, "last line"
+
+    runner.calls = calls
+    return runner
+
+
+def test_run_postproc_scores_and_writes_csv(store: Store, dev_dir: Path, tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("lit.autoresearch.DEV_DIR", dev_dir)
+    store.reset_session()
+    src = tmp_path / "raw.csv"
+    src.write_text("audio_filename,transcript\na.mp3,aku iso ya\nb.mp3,nèng kene\n")
+    row = run_postproc(store, src, ["diacritics"], "strip accents")
+    assert row["id"] == "p001" and row["status"] == "ok" and row["wer_all"] == 0.0
+    assert row["config"] == {"predictions": str(src), "rules": ["diacritics"]}
+    assert (store.predictions / "p001.csv").read_text().splitlines()[2] == "b.mp3,neng kene"
+    assert store.rows()[0]["id"] == "p001"
+
+
+def test_run_decode_uses_runner_and_scores(store: Store, dev_dir: Path, monkeypatch):
+    monkeypatch.setattr("lit.autoresearch.DEV_DIR", dev_dir)
+    store.reset_session()
+    runner = _fake_runner_factory(dev_dir)
+    cfg = {**DEFAULT_DECODE, "beam": 8}
+    row = run_decode(store, Path("runs/ct2/lora_v2"), cfg, ["diacritics"], "wider beam", runner=runner)
+    assert row["id"] == "d001" and row["status"] == "ok" and row["wer_all"] == 0.0
+    assert row["config"]["beam"] == 8 and row["config"]["model"] == "runs/ct2/lora_v2"
+    assert runner.calls[0][2] == "scripts/transcribe_dev.py"
+    assert (store.logs / "d001.log").exists()
+
+
+def test_run_decode_records_crash(store: Store, dev_dir: Path, monkeypatch):
+    monkeypatch.setattr("lit.autoresearch.DEV_DIR", dev_dir)
+    store.reset_session()
+    runner = _fake_runner_factory(dev_dir, fail_step="transcribe_dev")
+    row = run_decode(store, Path("m"), DEFAULT_DECODE, [], None, runner=runner)
+    assert row["status"] == "crash" and row["wer_all"] is None and row["error"] == "boom"
+    assert store.rows()[-1]["status"] == "crash"
+
+
+def test_run_decode_records_runner_exception(store: Store, dev_dir: Path, monkeypatch):
+    monkeypatch.setattr("lit.autoresearch.DEV_DIR", dev_dir)
+    store.reset_session()
+
+    def boom(cmd, log_path, budget_s):
+        raise FileNotFoundError("uv: command not found")
+
+    row = run_decode(store, Path("m"), DEFAULT_DECODE, [], None, runner=boom)
+    assert row["status"] == "crash" and row["wer_all"] is None
+    assert "FileNotFoundError" in row["error"]
+    assert len(store.rows()) == 1
+
+
+def test_run_train_records_runner_exception(store: Store, dev_dir: Path, tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("lit.autoresearch.DEV_DIR", dev_dir)
+    store.reset_session()
+
+    def boom(cmd, log_path, budget_s):
+        raise OSError("no space left on device")
+
+    row = run_train(store, ["--train", "x.csv"], "proxy", None, runner=boom, runs_dir=tmp_path / "runs")
+    assert row["status"] == "crash" and row["error"].startswith("train_lora")
+    assert "OSError" in row["error"]
+    assert len(store.rows()) == 1
+
+
+def test_run_train_proxy_chains_and_cleans_up(store: Store, dev_dir: Path, tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("lit.autoresearch.DEV_DIR", dev_dir)
+    store.reset_session()
+    runs = tmp_path / "runs"
+    runner = _fake_runner_factory(dev_dir)
+    row = run_train(store, ["--train", "x.csv", "--lr", "5e-5"], "proxy", "lower lr", runner=runner, runs_dir=runs)
+    assert row["id"] == "t001" and row["status"] == "ok" and row["wer_all"] == 0.0
+    assert [c[2] for c in runner.calls] == ["scripts/train_lora.py", "scripts/export_ct2.py", "scripts/transcribe_dev.py"]
+    assert row["config"] == {"mode": "proxy", "train_args": ["--train", "x.csv", "--lr", "5e-5"], "decode": DEFAULT_DECODE, "rules": ["diacritics"]}
+    assert not (runs / "t001").exists() and not (runs / "ct2" / "t001").exists()
+    assert (store.predictions / "t001.csv").exists()
+
+
+def test_run_train_full_keeps_artifacts_and_records_step_failure(store: Store, dev_dir: Path, tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("lit.autoresearch.DEV_DIR", dev_dir)
+    store.reset_session()
+    runs = tmp_path / "runs"
+    ok = _fake_runner_factory(dev_dir)
+    row = run_train(store, ["--train", "x.csv"], "full", None, runner=ok, runs_dir=runs)
+    assert row["status"] == "ok" and (runs / "t001" / "adapter").exists() and (runs / "ct2" / "t001").exists()
+    bad = _fake_runner_factory(dev_dir, fail_step="export_ct2")
+    row = run_train(store, ["--train", "x.csv"], "proxy", None, runner=bad, runs_dir=runs)
+    assert row["id"] == "t002" and row["status"] == "crash" and row["error"].startswith("export_ct2")
+    assert not (runs / "t002").exists()
