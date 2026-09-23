@@ -1,6 +1,10 @@
+from pathlib import Path
+
 import pytest
 
 from lit.postproc import RULES, apply
+
+REPO = Path(__file__).resolve().parents[1]
 
 
 def test_diacritics():
@@ -42,3 +46,12 @@ def test_apply_order_and_unknown_rule():
 
 def test_rule_names_are_stable():
     assert list(RULES) == ["diacritics", "case", "tail", "hai", "num2words"]
+
+
+def test_submission_postproc_is_a_verbatim_copy():
+    lit_src = (REPO / "lit" / "postproc.py").read_text()
+    sub_src = (REPO / "submission_src" / "postproc.py").read_text()
+    assert lit_src == sub_src, (
+        "lit/postproc.py drifted from submission_src/postproc.py: "
+        "copy it over to promote the new rules, or revert lit/postproc.py"
+    )

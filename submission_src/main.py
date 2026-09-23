@@ -11,7 +11,6 @@ import json
 import os
 import sys
 import time
-import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 
@@ -23,6 +22,9 @@ SUBMISSION_PATH = Path(os.environ.get("LIT_SUBMISSION_PATH", "/code_execution/su
 MODEL_DIR = Path(os.environ.get("LIT_MODEL_DIR", HERE / "model"))
 CONFIG_PATH = Path(os.environ.get("LIT_CONFIG", HERE / "config.json"))
 
+sys.path.insert(0, str(HERE))
+from postproc import apply  # noqa: E402  (sibling module; the zip has no package)
+
 
 def log(msg: str) -> None:
     print(f"[main] {msg}", flush=True)
@@ -31,12 +33,6 @@ def log(msg: str) -> None:
 def load_config(path: Path = CONFIG_PATH) -> dict:
     with open(path) as f:
         return json.load(f)
-
-
-def postprocess(text: str) -> str:
-    # References are written without diacritics (nèng -> neng); the scorer keeps them, so
-    # every accented word a Jember-tuned model emits would count as a substitution.
-    return "".join(c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn")
 
 
 def build_transcriber(model_dir: Path, cfg: dict) -> Callable[[Path], str]:
@@ -62,10 +58,11 @@ def build_transcriber(model_dir: Path, cfg: dict) -> Callable[[Path], str]:
             language=cfg.get("language"),
             beam_size=cfg.get("beam_size", 5),
             temperature=cfg.get("temperature", 0.0),
+            patience=cfg.get("patience", 1.0),
             condition_on_previous_text=cfg.get("condition_on_previous_text", False),
             vad_filter=cfg.get("vad_filter", False),
         )
-        return postprocess(" ".join(s.text.strip() for s in segments).strip())
+        return apply(" ".join(s.text.strip() for s in segments).strip(), cfg.get("postprocess", ["diacritics"]))
 
     return transcribe
 
