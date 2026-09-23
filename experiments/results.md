@@ -125,8 +125,8 @@ Validation before upload (2026-09-23): `uv run pytest -q` 27 passed; 10-clip GPU
 
 | date | id | type | score | notes |
 |---|---|---|---|---|
-| pending | | smoke test | | upload `~/repos/lost-in-transcription-runtime/submission/submission.zip` (sha256 prefix `99c7a838`) |
-| pending | | full evaluation (lora_v5) | | compare with v2's 0.2780 (rank #35) and baseline 0.4697; 1 weekly submission was left as of 2026-09-22 |
+| 2026-09-23 | id-2448 | smoke test | 0.1043 | zip sha256 prefix `99c7a838`; smoke history baseline 0.2304 -> v2 0.1609 -> v5 0.1043, i.e. v5's smoke gain over v2 (-0.0566, -35% relative) is far larger than its convo-2 gain (-0.0074, -4%), consistent with a test set heavier in Central Javanese than dev. v2's rank had drifted from #35 to #38 by this date. |
+| pending | | full evaluation (lora_v5) | | compare with v2's 0.2780 and baseline 0.4697; rolling 7-day quota: 1 of 3 left on 2026-09-23, slots free again 2026-09-28 and 2026-09-29 |
 
 Both v1 and v2/v3 were trained with Jember's diacritics in the targets (`nèng`, `akèh`); the in-training val WERs above therefore include diacritic substitutions and are only comparable to each other, not to `scripts/score.py` numbers. Fixed 2026-09-22 for future runs: `load_manifests` in `scripts/train_lora.py` now strips diacritics from training text (`lit.data.strip_diacritics`); v2/v3 loaded the old code before the fix. At inference, `submission_src/main.py` now applies `postprocess` (strip diacritics) inside `transcribe`; it is a no-op on the zero-shot model's output and worth -5 pt on Jember-tuned models. Honest comparison of zero-shot / v1 / v2 / v3 on convo 2 (beam 5, CT2, diacritics stripped) is in `predictions/C2_comparison.txt` once `runs/overnight2.sh` finishes.
 
