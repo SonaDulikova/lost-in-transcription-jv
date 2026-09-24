@@ -219,7 +219,7 @@ def train_cmd(run_id: str, train_args: list[str], out: Path, proxy: bool, dry: b
     cmd = UV + ["scripts/train_lora.py", "--out", str(out), "--val", "data/dev_segments/convo2.csv",
                 "--language", "id", *train_args]
     if proxy:
-        cmd += ["--epochs", "1", "--train-limit", "1000", "--val-limit", "40", "--no-wandb", "--run-name", run_id]
+        cmd += ["--epochs", "1", "--train-limit", "500", "--val-limit", "40", "--no-wandb", "--run-name", run_id]
     else:
         cmd += ["--val-limit", "78", "--run-name", run_id]
     if dry:

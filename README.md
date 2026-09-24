@@ -149,11 +149,15 @@ Platform submissions:
 |---|---|---|---|
 | 2026-09-21 | full evaluation | zero-shot turbo (B002) | 0.4697, rank 90 |
 | 2026-09-22 | full evaluation | lora_v2 | 0.2780, rank 35 |
-| pending | full evaluation | lora_v5 | see `experiments/results.md` |
+| 2026-09-23 | full evaluation | lora_v5 (submitted) | 0.2600, rank 22 |
 
 The public score is far above dev WER for the same zip. The scorer was checked
 against `third_party/score.py` and matches, so the hidden test set is harder
 than dev; dev deltas rank configurations but absolute levels do not transfer.
+Relative deltas do transfer, roughly: v5 improved on v2 by 4.0% relative on dev
+conversation 2 and by 6.5% relative on the leaderboard. The platform's smoke
+subset is a pass/fail check on the zip only, not a size estimate; it put the
+same change at 35% relative.
 
 ## Hardware
 
