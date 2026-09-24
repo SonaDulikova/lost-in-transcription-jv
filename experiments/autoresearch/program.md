@@ -8,7 +8,13 @@ and be honest in the log.
 ## The metric
 
 Corpus WER on dev conversation 2 (78 clips never used in training), CT2
-float16, diacritics stripped. Lower is better. Read the current best per kind
+float16, diacritics stripped. Lower is better. Convo 2 is also the checkpoint
+selection set: `--val data/dev_segments/convo2.csv` and
+`load_best_model_at_end=True, metric_for_best_model="wer"` mean every `train`
+row already picked its checkpoint on the same 78 clips it is scored on here.
+"Never used in training" is true for gradient updates, not for selection;
+hard-optimising a hypothesis against this one number will overfit it. Read the
+current best per kind
 from `experiments/autoresearch/results.md` before your first run
 (`uv run scripts/experiment.py table` regenerates it). Numbers to beat as of
 2026-09-23: decode 0.1760 (lora_v5 = convo 5 + Central Javanese, beam 5),
@@ -35,7 +41,7 @@ Kinds, cheapest first:
 
 | kind | what it varies | budget | example |
 |---|---|---|---|
-| `postproc` | rule set on an existing CSV | seconds | `postproc --predictions experiments/autoresearch/predictions/d003.csv --rules diacritics,tail,hai` |
+| `postproc` | rule set on an existing CSV | seconds | `postproc --predictions experiments/autoresearch/predictions/<best decode id>.csv --rules diacritics,tail,hai` (e.g. `d001.csv`; use the predictions CSV of the current best `decode` row) |
 | `decode` | CT2 model + decode params | 10 min | `decode --beam 8 --patience 1.5 --rules diacritics` |
 | `train --proxy` | coarse rejection of LoRA/data regressions; 1 epoch on 500 chunks | 45 min hard limit (measured ~9 min) | `train --proxy --hypothesis "..." -- --train data/jember_segments/train.csv --train data/dev_segments/convo5.csv --lr 5e-5 --rank 16` |
 | `train --full` | LoRA hyperparameters, data mix, `scripts/train_lora.py` edits at full size | 5 h | 2-4 per night; proxy WER does not rank close candidates (see below) |
@@ -58,6 +64,12 @@ Nothing else. In particular never edit or write under `submission_src/`, the
 top-level `predictions/` (NOT `experiments/autoresearch/predictions/`, which
 the runner writes to itself), `data/`, `runs/ct2/lora_v*`, or
 `experiments/results.md`.
+
+`tests/test_postproc.py` asserts `lit/postproc.py` and
+`submission_src/postproc.py` are byte-identical. A kept postproc rule stays
+dev-side; the human promotes it later by copying the file over. That test
+going red after you edit `lit/postproc.py` is the expected state, not
+something for you to fix or work around.
 Never call the platform, never run git commands that change history or the
 remote, never start a second training.
 
@@ -71,11 +83,14 @@ remote, never start a second training.
    the candidates file.
 4. `note` the conclusion. For postproc/decode, keep a code edit only if its row
    beat the current best of that kind; otherwise revert it (`git checkout --
-   <file>` on the file you edited is allowed; nothing else in git is). For a
-   training edit, revert after a gross proxy regression; otherwise keep it
-   only long enough to run the hypothesis-driven full test, then keep/revert
-   from that full-run WER. Never keep or revert a close training result from
-   proxy ordering alone.
+   <file>`, by the exact path of the file you edited, is allowed; nothing else
+   in git is). `results.jsonl` and `results.md` are tracked and are rewritten
+   by every run, so a directory-wide or whole-tree form — `git checkout -- .`,
+   `git restore .`, or the like — is forbidden: it would erase the night's log
+   along with your edit. For a training edit, revert after a gross proxy
+   regression; otherwise keep it only long enough to run the hypothesis-driven
+   full test, then keep/revert from that full-run WER. Never keep or revert a
+   close training result from proxy ordering alone.
 5. Pick the next experiment. Prefer cheap kinds while they still yield
    improvements. A `train --proxy` may reject a clearly bad training change,
    but never rank close candidates: validation measured 0.0036 seed noise and
@@ -88,9 +103,18 @@ remote, never start a second training.
 
 ## Stopping
 
+The human runs `session --reset` before leaving for the night. If you hit the
+runner's "no session: run `session --reset`" refusal anyway, you may run
+`session --reset` yourself exactly once, as your very first command, and never
+again for the rest of the night.
+
 The runner refuses to start once 12 h have passed since `session --reset`,
-after 40 rows, or when `experiments/autoresearch/STOP` exists. When refused,
-or when you decide to stop, run `uv run scripts/experiment.py table` and write
+after 40 rows, or when `experiments/autoresearch/STOP` exists. `STOP` and
+these session limits only block a *new* run from starting; they do not abort
+one already in flight. If a training is running when you decide to stop, or
+when you hit a refusal, you must kill it by hand — it will otherwise keep
+running past the session window. When refused, or when you decide to stop,
+run `uv run scripts/experiment.py table` and write
 `experiments/autoresearch/candidates.md` with three short lists:
 
 - best decode + postproc configuration (id, WER, exact flags);

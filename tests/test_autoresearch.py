@@ -1,3 +1,5 @@
+import hashlib
+import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -5,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from lit.autoresearch import (
-    DEFAULT_DECODE, Store, decode_cmd, export_cmd, make_row, run_logged, score_convo,
-    table_md, train_cmd,
+    DEFAULT_DECODE, PROVENANCE_FILES, Store, decode_cmd, export_cmd, make_row, provenance, run_logged,
+    score_convo, table_md, train_cmd,
 )
 
 
@@ -197,7 +199,10 @@ def test_run_postproc_scores_and_writes_csv(store: Store, dev_dir: Path, tmp_pat
     src.write_text("audio_filename,transcript\na.mp3,aku iso ya\nb.mp3,nèng kene\n")
     row = run_postproc(store, src, ["diacritics"], "strip accents")
     assert row["id"] == "p001" and row["status"] == "ok" and row["wer_all"] == 0.0
-    assert row["config"] == {"predictions": str(src), "rules": ["diacritics"]}
+    config = dict(row["config"])
+    prov = config.pop("provenance")
+    assert config == {"predictions": str(src), "rules": ["diacritics"]}
+    assert set(prov["src"]) == set(PROVENANCE_FILES)
     assert (store.predictions / "p001.csv").read_text().splitlines()[2] == "b.mp3,neng kene"
     assert store.rows()[0]["id"] == "p001"
 
@@ -257,7 +262,10 @@ def test_run_train_proxy_chains_and_cleans_up(store: Store, dev_dir: Path, tmp_p
     row = run_train(store, ["--train", "x.csv", "--lr", "5e-5"], "proxy", "lower lr", runner=runner, runs_dir=runs)
     assert row["id"] == "t001" and row["status"] == "ok" and row["wer_all"] == 0.0
     assert [c[2] for c in runner.calls] == ["scripts/train_lora.py", "scripts/export_ct2.py", "scripts/transcribe_dev.py"]
-    assert row["config"] == {"mode": "proxy", "train_args": ["--train", "x.csv", "--lr", "5e-5"], "decode": DEFAULT_DECODE, "rules": ["diacritics"]}
+    config = dict(row["config"])
+    prov = config.pop("provenance")
+    assert config == {"mode": "proxy", "train_args": ["--train", "x.csv", "--lr", "5e-5"], "decode": DEFAULT_DECODE, "rules": ["diacritics"]}
+    assert set(prov["src"]) == set(PROVENANCE_FILES)
     assert not (runs / "t001").exists() and not (runs / "ct2" / "t001").exists()
     assert (store.predictions / "t001.csv").exists()
 
@@ -273,3 +281,107 @@ def test_run_train_full_keeps_artifacts_and_records_step_failure(store: Store, d
     row = run_train(store, ["--train", "x.csv"], "proxy", None, runner=bad, runs_dir=runs)
     assert row["id"] == "t002" and row["status"] == "crash" and row["error"].startswith("export_ct2")
     assert not (runs / "t002").exists()
+
+
+def test_run_train_full_deletes_merged_dir_after_export(store: Store, dev_dir: Path, tmp_path: Path, monkeypatch):
+    # export_ct2.py writes the fp32 merged model to <out>/merged (adapter.parent / "merged") before
+    # converting to CT2; a full run keeps <out> but the merged copy is reproducible from the adapter
+    # and must not be left on disk (~3.2 GB/run).
+    monkeypatch.setattr("lit.autoresearch.DEV_DIR", dev_dir)
+    store.reset_session()
+    runs = tmp_path / "runs"
+    base = _fake_runner_factory(dev_dir)
+
+    def runner(cmd, log_path, budget_s):
+        if cmd[2] == "scripts/export_ct2.py":
+            adapter = Path(cmd[cmd.index("--adapter") + 1])
+            merged = adapter.parent / "merged"
+            merged.mkdir(parents=True, exist_ok=True)
+            (merged / "model.safetensors").write_bytes(b"x")
+        return base(cmd, log_path, budget_s)
+
+    row = run_train(store, ["--train", "x.csv"], "full", None, runner=runner, runs_dir=runs)
+    assert row["status"] == "ok"
+    assert (runs / "t001" / "adapter").exists()
+    assert (runs / "ct2" / "t001").exists()
+    assert not (runs / "t001" / "merged").exists()
+
+
+def test_run_decode_caps_error_tail(store: Store, dev_dir: Path, monkeypatch):
+    monkeypatch.setattr("lit.autoresearch.DEV_DIR", dev_dir)
+    store.reset_session()
+
+    def runner(cmd, log_path, budget_s):
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("x" * 5000)
+        return "crash", 1, "x" * 5000
+
+    row = run_decode(store, Path("m"), DEFAULT_DECODE, [], None, runner=runner)
+    assert row["status"] == "crash"
+    assert len(row["error"]) == 2000
+
+
+def test_note_write_is_atomic(store: Store, monkeypatch):
+    store.append(make_row("d001", "decode", {}, "h", "ok", 1.0))
+    original = store.results.read_text()
+
+    def boom(*a, **k):
+        raise OSError("simulated crash before rename")
+
+    monkeypatch.setattr("lit.autoresearch.os.replace", boom)
+    with pytest.raises(OSError):
+        store.note("d001", "boom")
+    # the target file must be untouched by a write that never reached os.replace()
+    assert store.results.read_text() == original
+    monkeypatch.undo()
+    store.note("d001", "ok now")
+    assert store.rows()[0]["conclusion"] == "ok now"
+    # no leftover temp file after a successful write
+    assert list(store.root.glob("results.jsonl.tmp*")) == []
+
+
+def test_refusal_full_train_needs_enough_time_left(store: Store):
+    s = store.reset_session(max_hours=12, max_runs=40)
+    started = datetime.fromisoformat(s["started"])
+    # only 4 h remain in the 12 h session; a full run needs BUDGET_S["full"] == 5 h
+    almost_out_of_time = started + timedelta(hours=8)
+    reason = store.refusal("train", now=almost_out_of_time, mode="full")
+    assert reason is not None and "h left in the session" in reason and "5 h" in reason
+    # proxy/dry runs are unaffected by the full-run time check
+    assert store.refusal("train", now=almost_out_of_time, mode="proxy") is None
+    assert store.refusal("train", now=almost_out_of_time) is None
+    # plenty of time left: no refusal
+    plenty_of_time = started + timedelta(hours=1)
+    assert store.refusal("train", now=plenty_of_time, mode="full") is None
+    # existing precedence is preserved: STOP / no-session / exhausted / gpu-busy still win
+    store.stop.touch()
+    assert store.refusal("train", now=almost_out_of_time, mode="full") == "STOP file present"
+
+
+def test_provenance_hash_changes_with_file_bytes(tmp_path: Path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    f = repo / "foo.py"
+    f.write_text("a")
+    subprocess.run(["git", "add", "foo.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+
+    monkeypatch.setattr("lit.autoresearch.REPO", repo)
+    monkeypatch.setattr("lit.autoresearch.PROVENANCE_FILES", ("foo.py", "missing.py"))
+    store = Store(repo / "autoresearch")
+
+    p1 = provenance(store, "t001")
+    assert p1["head"] is not None
+    assert p1["src"]["foo.py"] == hashlib.sha256(b"a").hexdigest()[:12]
+    assert p1["src"]["missing.py"] is None
+    assert not (store.logs / "t001.diff").exists()  # no uncommitted change yet
+
+    f.write_text("b")  # uncommitted edit, as the agent would make between runs
+    p2 = provenance(store, "t002")
+    assert p2["src"]["foo.py"] == hashlib.sha256(b"b").hexdigest()[:12]
+    assert p2["src"]["foo.py"] != p1["src"]["foo.py"]
+    assert p2["head"] == p1["head"]  # HEAD unchanged; only the working-tree bytes moved
+    assert (store.logs / "t002.diff").read_text().strip() != ""

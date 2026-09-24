@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -29,6 +30,35 @@ DEFAULT_MODEL = REPO / "runs" / "ct2" / "lora_v5"
 DEFAULT_DECODE = {"language": "id", "beam": 5, "temperature": 0.0, "patience": None,
                   "condition_on_previous_text": False, "vad_filter": False}
 UV = ["uv", "run"]
+
+PROVENANCE_FILES = ("lit/postproc.py", "scripts/train_lora.py", "lit/autoresearch.py")
+
+
+def atomic_write(path: Path, text: str) -> None:
+    """Write text to a sibling temp file and os.replace() it onto the target, so an interruption
+    mid-write cannot leave a truncated file behind (results.jsonl and results.md are rewritten
+    wholesale on every `note`/`table` call, ~40x/night)."""
+    tmp = path.with_name(f"{path.name}.tmp{os.getpid()}")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+def provenance(store: "Store", run_id: str) -> dict:
+    """Identify the source state a row was produced with: commit plus a hash per editable file.
+
+    The agent edits these files between runs, so two rows with the same config can still be
+    different experiments; the hashes are what makes rows comparable after the fact.
+    """
+    head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, cwd=REPO)
+    src = {}
+    for rel in PROVENANCE_FILES:
+        p = REPO / rel
+        src[rel] = hashlib.sha256(p.read_bytes()).hexdigest()[:12] if p.exists() else None
+    diff = subprocess.run(["git", "diff", "--", *PROVENANCE_FILES], capture_output=True, text=True, cwd=REPO)
+    if diff.returncode == 0 and diff.stdout.strip():
+        store.logs.mkdir(parents=True, exist_ok=True)
+        (store.logs / f"{run_id}.diff").write_text(diff.stdout)
+    return {"head": head.stdout.strip() if head.returncode == 0 else None, "src": src}
 
 
 def make_row(run_id: str, kind: str, config: dict, hypothesis: str | None, status: str, runtime_s: float,
@@ -96,7 +126,7 @@ class Store:
         if not hits:
             raise KeyError(run_id)
         hits[0]["conclusion"] = conclusion
-        self.results.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+        atomic_write(self.results, "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
 
     def reset_session(self, max_hours: float = 12.0, max_runs: int = 40) -> dict:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -106,20 +136,26 @@ class Store:
         self.session.write_text(json.dumps(s, indent=2) + "\n")
         return s
 
-    def refusal(self, kind: str, now: datetime | None = None, gpu_busy: bool = False) -> str | None:
+    def refusal(self, kind: str, now: datetime | None = None, gpu_busy: bool = False,
+                mode: str | None = None) -> str | None:
         if self.stop.exists():
             return "STOP file present"
         if not self.session.exists():
             return "no session: run `session --reset`"
         s = json.loads(self.session.read_text())
         now = now or datetime.now()
-        if now - datetime.fromisoformat(s["started"]) > timedelta(hours=s["max_hours"]):
+        started = datetime.fromisoformat(s["started"])
+        if now - started > timedelta(hours=s["max_hours"]):
             return f"session exhausted: {s['max_hours']:g} h elapsed, run `session --reset`"
         done = len(self.rows()) - s["rows_at_start"]
         if done >= s["max_runs"]:
             return f"session exhausted: {s['max_runs']} runs, run `session --reset`"
         if kind == "train" and gpu_busy:
             return "a scripts/train_lora.py process is running"
+        if kind == "train" and mode == "full":
+            remaining = s["max_hours"] * 3600 - (now - started).total_seconds()
+            if remaining < BUDGET_S["full"]:
+                return f"only {remaining/3600:.1f} h left in the session; a full run needs {BUDGET_S['full']/3600:.0f} h"
         return None
 
 
@@ -240,7 +276,7 @@ def _finish(store: Store, row: dict) -> dict:
 
 def run_postproc(store: Store, predictions: Path, rules: Sequence[str], hypothesis: str | None) -> dict:
     run_id = store.next_id("postproc")
-    config = {"predictions": str(predictions), "rules": list(rules)}
+    config = {"predictions": str(predictions), "rules": list(rules), "provenance": provenance(store, run_id)}
     t0 = time.time()
     try:
         metrics = score_convo(predictions, rules)
@@ -272,11 +308,11 @@ def _run_or_error(runner, cmd, log, budget) -> tuple[str, str | None]:
 def run_decode(store: Store, model: Path, cfg: dict, rules: Sequence[str], hypothesis: str | None,
                runner=run_logged) -> dict:
     run_id = store.next_id("decode")
-    config = {"model": str(model), **cfg, "rules": list(rules)}
+    config = {"model": str(model), **cfg, "rules": list(rules), "provenance": provenance(store, run_id)}
     out_csv = store.predictions / f"{run_id}.csv"
     t0 = time.time()
     status, tail = _run_or_error(runner, decode_cmd(model, out_csv, cfg), store.logs / f"{run_id}.log", BUDGET_S["decode"])
-    metrics, error = (None, tail) if status != "ok" else _score_or_error(out_csv, rules)
+    metrics, error = (None, tail[-2000:]) if status != "ok" else _score_or_error(out_csv, rules)
     if error and status == "ok":
         status = "crash"
     return _finish(store, make_row(run_id, "decode", config, hypothesis, status, time.time() - t0, metrics, error))
@@ -286,7 +322,8 @@ def run_train(store: Store, train_args: list[str], mode: str, hypothesis: str | 
               runner=run_logged, runs_dir: Path = REPO / "runs") -> dict:
     run_id = store.next_id("train")
     rules = ["diacritics"]
-    config = {"mode": mode, "train_args": list(train_args), "decode": DEFAULT_DECODE, "rules": rules}
+    config = {"mode": mode, "train_args": list(train_args), "decode": DEFAULT_DECODE, "rules": rules,
+              "provenance": provenance(store, run_id)}
     out, ct2 = runs_dir / run_id, runs_dir / "ct2" / run_id
     out_csv = store.predictions / f"{run_id}.csv"
     log = store.logs / f"{run_id}.log"
@@ -301,6 +338,10 @@ def run_train(store: Store, train_args: list[str], mode: str, hypothesis: str | 
     for name, cmd in steps:
         remaining = max(budget - (time.time() - t0), 1.0)
         status, tail = _run_or_error(runner, cmd, log, remaining)
+        if name == "export_ct2" and status == "ok":
+            # the fp32 merged model is fully reproducible from the adapter; keeping it around
+            # (~3.2 GB) is the difference between one and two full runs fitting on disk overnight
+            shutil.rmtree(out / "merged", ignore_errors=True)
         if status != "ok":
             error = f"{name} {status}: {tail[-2000:]}"
             break

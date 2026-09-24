@@ -8,8 +8,12 @@ import sys
 from pathlib import Path
 
 from lit.autoresearch import (
-    DEFAULT_DECODE, DEFAULT_MODEL, REPO, Store, gpu_busy, run_decode, run_postproc, run_train, table_md,
+    DEFAULT_DECODE, DEFAULT_MODEL, REPO, Store, atomic_write, gpu_busy, run_decode, run_postproc, run_train, table_md,
 )
+
+# argparse keeps the LAST occurrence of a repeated flag, so anything the agent passes after `--`
+# would silently override these runner-owned flags (see train_cmd) unless refused up front.
+FORBIDDEN_TRAIN_FLAGS = ("--out", "--val", "--run-name", "--wandb-project")
 
 
 def _rules(s: str) -> list[str]:
@@ -69,11 +73,12 @@ def main(argv: list[str] | None = None) -> int:
         store.note(args.id, args.conclusion)
         return 0
     if args.cmd == "table":
-        store.table.write_text(table_md(store.rows()))
+        atomic_write(store.table, table_md(store.rows()))
         print(f"wrote {store.table}")
         return 0
 
-    reason = store.refusal(args.cmd, gpu_busy=gpu_busy() if args.cmd == "train" else False)
+    reason = store.refusal(args.cmd, gpu_busy=gpu_busy() if args.cmd == "train" else False,
+                            mode=getattr(args, "mode", None))
     if reason:
         print(f"refused: {reason}")
         return 2
@@ -86,8 +91,16 @@ def main(argv: list[str] | None = None) -> int:
                "vad_filter": args.vad_filter}
         run_decode(store, args.model, cfg, args.rules, args.hypothesis)
     else:
+        bad = next((f for f in FORBIDDEN_TRAIN_FLAGS
+                    if any(x == f or x.startswith(f + "=") for x in extra)), None)
+        if bad:
+            print(f"refused: {bad} is set by the runner and cannot be passed through")
+            return 2
         free_gb = shutil.disk_usage(REPO / "runs").free / 1e9
-        if free_gb < 20:
+        if args.mode == "full" and free_gb < 45:
+            print(f"refused: only {free_gb:.0f} GB free under runs/, a full run needs ~45 GB")
+            return 2
+        elif args.mode != "full" and free_gb < 20:
             print(f"warning: {free_gb:.0f} GB free under runs/")
         run_train(store, extra, args.mode, args.hypothesis)
     return 0
