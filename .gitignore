@@ -230,3 +230,7 @@ predictions/*
 *.bin
 *.safetensors
 wandb/
+experiments/autoresearch/predictions/
+experiments/autoresearch/logs/
+experiments/autoresearch/session.json
+experiments/autoresearch/STOP

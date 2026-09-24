@@ -139,7 +139,7 @@ def test_train_cmd_proxy_overrides_come_last():
     assert cmd[:3] == ["uv", "run", "scripts/train_lora.py"]
     assert cmd[cmd.index("--val") + 1] == "data/dev_segments/convo2.csv"
     # argparse keeps the last value, so the proxy overrides must follow the agent's flags
-    assert cmd[cmd.index("--lr") + 2:] == ["--epochs", "1", "--train-limit", "500", "--val-limit", "40", "--no-wandb", "--run-name", "t001"]
+    assert cmd[cmd.index("--lr") + 2:] == ["--epochs", "1", "--train-limit", "1000", "--val-limit", "40", "--no-wandb", "--run-name", "t001"]
     full = train_cmd("t002", args, Path("runs/t002"), proxy=False, dry=False)
     assert "--no-wandb" not in full and full[full.index("--val-limit") + 1] == "78"
     dry = train_cmd("t003", args, Path("runs/t003"), proxy=True, dry=True)
