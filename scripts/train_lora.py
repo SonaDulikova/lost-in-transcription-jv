@@ -97,9 +97,13 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=2)
     ap.add_argument("--accum", type=int, default=8)
     ap.add_argument("--rank", type=int, default=32)
+    ap.add_argument("--lora-scope", default="all", choices=["all", "decoder", "encoder"],
+                    help="which half of the model LoRA adapts; 'all' is the historical default")
     ap.add_argument("--val-limit", type=int, default=150)
     ap.add_argument("--train-limit", type=int, default=None, help="subsample for dry runs")
     ap.add_argument("--sample-seed", type=int, default=0, help="random_state for --train-limit subsampling")
+    ap.add_argument("--seed", type=int, default=0,
+                    help="trainer seed and augmentation RNG; 0 reproduces every run before 2026-09-24")
     ap.add_argument("--no-augment", action="store_true")
     ap.add_argument("--wandb-project", default=DEFAULT_WANDB_PROJECT)
     ap.add_argument("--run-name", default=None)
@@ -126,8 +130,13 @@ def main() -> None:
     model.generation_config.task = "transcribe"
     model.generation_config.forced_decoder_ids = None
 
+    # A plain list matches by module-name suffix (every encoder and decoder block); a string is
+    # treated as a regex over the full module name, which is how a single half gets selected.
+    targets = ["q_proj", "k_proj", "v_proj", "out_proj", "fc1", "fc2"]
+    if args.lora_scope != "all":
+        targets = rf".*\.{args.lora_scope}\..*\.({'|'.join(targets)})"
     lora = LoraConfig(r=args.rank, lora_alpha=2 * args.rank, lora_dropout=0.05, bias="none",
-                      target_modules=["q_proj", "k_proj", "v_proj", "out_proj", "fc1", "fc2"])
+                      target_modules=targets)
     model = get_peft_model(model, lora)
     model.enable_input_require_grads()
     model.print_trainable_parameters()
@@ -137,7 +146,7 @@ def main() -> None:
     print(f"train {len(train_df)} chunks ({train_df['duration'].sum() / 3600:.2f} h), val {len(val_df)}")
     train_ds = Dataset.from_pandas(train_df[["path", "text"]])
     val_ds = Dataset.from_pandas(val_df[["path", "text"]])
-    train_ds.set_transform(make_transform(processor, augment=not args.no_augment))
+    train_ds.set_transform(make_transform(processor, augment=not args.no_augment, seed=args.seed))
     val_ds.set_transform(make_transform(processor, augment=False))
 
     def compute_metrics(pred):
@@ -174,7 +183,7 @@ def main() -> None:
         dataloader_num_workers=4,
         report_to=report_to,
         run_name=args.run_name or args.out.name,
-        seed=0,
+        seed=args.seed,
     )
     trainer = Seq2SeqTrainer(
         model=model,
