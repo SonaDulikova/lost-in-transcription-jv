@@ -91,3 +91,27 @@ def group_by_duration(durations: list[float], max_seconds: float, gap: float = 0
     if cur:
         groups.append(cur)
     return groups
+
+
+def load_slr35_index(path: Path) -> pd.DataFrame:
+    """Read OpenSLR SLR35 utt_spk_text.tsv (no header: id, speaker, text) into id, speaker, text."""
+    df = pd.read_csv(path, sep="\t", header=None, names=["id", "speaker", "text"], dtype=str,
+                     keep_default_na=False, quoting=3)
+    df["text"] = df["text"].str.strip()
+    df = df[df["text"] != ""]
+    return df.reset_index(drop=True)
+
+
+def slr35_mapping(index: pd.DataFrame, available_ids: set[str]) -> pd.DataFrame:
+    """Rows for prepare_tts.py: file relative to asr_javanese/data, text ending in a sentence terminator.
+
+    Sorted by speaker so consecutive rows (hence packed chunks) are single-speaker. Diacritics stay;
+    train_lora.load_manifests strips them.
+    """
+    df = index[index["id"].isin(available_ids)].copy()
+    df["text"] = df["text"].str.strip()
+    df = df[df["text"] != ""]
+    df = df.sort_values(["speaker", "id"], kind="stable")
+    df["file"] = df["id"].str[:2] + "/" + df["id"] + ".flac"
+    df["text"] = df["text"].where(df["text"].str[-1].isin(list(".!?")), df["text"] + ".")
+    return df[["file", "text"]].reset_index(drop=True)

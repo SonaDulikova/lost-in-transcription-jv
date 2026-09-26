@@ -7,8 +7,10 @@ from lit.data import (
     group_by_duration,
     load_dev,
     load_jember_tsv,
+    load_slr35_index,
     load_tts_tsv,
     parse_hms,
+    slr35_mapping,
     split_sessions,
     strip_diacritics,
 )
@@ -82,3 +84,56 @@ def test_group_by_duration_packs_consecutive_items():
 
 def test_group_by_duration_empty():
     assert group_by_duration([], max_seconds=20.0) == []
+
+
+def test_load_slr35_index(tmp_path: Path):
+    p = tmp_path / "utt_spk_text.tsv"
+    p.write_text("00004fe6aa\ta4815\tKanthong semar minangka tanduran\n"
+                 "0000e5df79\tffe12\t  Banjur saluran mbelok  \n"
+                 "0001bbbc2e\t0a834\t\n")
+    df = load_slr35_index(p)
+    assert df.columns.tolist() == ["id", "speaker", "text"]
+    assert df["id"].tolist() == ["00004fe6aa", "0000e5df79"]
+    assert df["text"].tolist() == ["Kanthong semar minangka tanduran", "Banjur saluran mbelok"]
+    assert pd.api.types.is_string_dtype(df["speaker"])  # speaker ids like "0a834" must stay strings
+    assert df["speaker"].tolist() == ["a4815", "ffe12"]
+
+
+def _index(rows):
+    return pd.DataFrame(rows, columns=["id", "speaker", "text"])
+
+
+def test_slr35_mapping_filters_to_available():
+    idx = _index([("aa11", "s1", "Siji"), ("bb22", "s1", "Loro"), ("cc33", "s2", "Telu")])
+    m = slr35_mapping(idx, available_ids={"aa11", "cc33"})
+    assert m["file"].tolist() == ["aa/aa11.flac", "cc/cc33.flac"]
+
+
+def test_slr35_mapping_sorts_by_speaker_then_id():
+    idx = _index([("zz99", "s2", "A"), ("aa11", "s2", "B"), ("mm55", "s1", "C")])
+    m = slr35_mapping(idx, available_ids={"zz99", "aa11", "mm55"})
+    assert m["file"].tolist() == ["mm/mm55.flac", "aa/aa11.flac", "zz/zz99.flac"]
+
+
+def test_slr35_mapping_appends_period():
+    idx = _index([("aa11", "s1", "Kanthong semar minangka tanduran")])
+    m = slr35_mapping(idx, available_ids={"aa11"})
+    assert m["text"].tolist() == ["Kanthong semar minangka tanduran."]
+
+
+def test_slr35_mapping_keeps_existing_terminator():
+    idx = _index([("aa11", "s1", "Kuwi apa?"), ("bb22", "s1", "Ayo!"), ("cc33", "s1", "Wis.")])
+    m = slr35_mapping(idx, available_ids={"aa11", "bb22", "cc33"})
+    assert m["text"].tolist() == ["Kuwi apa?", "Ayo!", "Wis."]
+
+
+def test_slr35_mapping_drops_empty_text():
+    idx = _index([("aa11", "s1", "   "), ("bb22", "s1", "Loro")])
+    m = slr35_mapping(idx, available_ids={"aa11", "bb22"})
+    assert m["file"].tolist() == ["bb/bb22.flac"]
+
+
+def test_slr35_mapping_keeps_diacritics():
+    idx = _index([("aa11", "s1", "Dheweké uga diundhang")])
+    m = slr35_mapping(idx, available_ids={"aa11"})
+    assert m["text"].tolist() == ["Dheweké uga diundhang."]
