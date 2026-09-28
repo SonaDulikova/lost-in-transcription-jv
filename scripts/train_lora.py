@@ -115,7 +115,9 @@ class SnapshotCallback(TrainerCallback):
         per_step = state.max_steps / (args.num_train_epochs * self.per_epoch)  # steps per snapshot
         k0 = math.ceil(self.from_epoch * self.per_epoch)
         k1 = math.floor(args.num_train_epochs * self.per_epoch)
-        self.steps = {int(k * per_step + 0.5) for k in range(k0, k1 + 1)} | {state.max_steps}
+        self.steps = {int(k * per_step + 0.5) for k in range(k0, k1 + 1)}
+        if self.from_epoch <= args.num_train_epochs:
+            self.steps.add(state.max_steps)
 
     def on_step_end(self, args, state, control, model=None, **kwargs):
         if state.global_step in self.steps and state.is_world_process_zero:

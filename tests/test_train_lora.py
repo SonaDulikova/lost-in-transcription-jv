@@ -159,6 +159,10 @@ def test_snapshots_sit_on_the_nearest_step_to_each_quarter_epoch(tmp_path):
         "step-42", "step-47", "step-53", "step-58", "step-63"]
 
 
+def test_no_snapshots_when_the_run_ends_before_the_start_epoch(tmp_path):
+    assert run_snapshots(tmp_path, max_steps=6, epochs=0.05, from_epoch=2) == []
+
+
 def test_snapshot_flags_default_off():
     base = ["--train", "a.csv", "--val", "b.csv", "--out", "o"]
     assert tl.parse_args(base).snapshot_from_epoch is None
