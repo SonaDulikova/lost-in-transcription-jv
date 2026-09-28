@@ -44,7 +44,7 @@ def build_transcriber(model_dir: Path, cfg: dict) -> Callable[[Path], str]:
     except ImportError:
         pass
     import ctranslate2
-    from faster_whisper import WhisperModel
+    from faster_whisper import WhisperModel, decode_audio
 
     use_gpu = ctranslate2.get_cuda_device_count() > 0
     device = "cuda" if use_gpu else "cpu"
@@ -52,15 +52,23 @@ def build_transcriber(model_dir: Path, cfg: dict) -> Callable[[Path], str]:
     log(f"loading model from {model_dir.name} on {device} ({compute_type})")
     model = WhisperModel(str(model_dir), device=device, compute_type=compute_type, cpu_threads=os.cpu_count() or 4)
 
+    sampling_rate = 16000
+    no_timestamps = cfg.get("without_timestamps", False)
+    # without timestamps faster-whisper cuts audio at hard 30 s windows and drops words at the cut,
+    # so longer clips keep timestamp-driven seeking
+    max_s = cfg.get("without_timestamps_max_s")
+
     def transcribe(path: Path) -> str:
+        audio = decode_audio(str(path), sampling_rate=sampling_rate)
         segments, _info = model.transcribe(
-            str(path),
+            audio,
             language=cfg.get("language"),
             beam_size=cfg.get("beam_size", 5),
             temperature=cfg.get("temperature", 0.0),
             patience=cfg.get("patience", 1.0),
             condition_on_previous_text=cfg.get("condition_on_previous_text", False),
             vad_filter=cfg.get("vad_filter", False),
+            without_timestamps=no_timestamps and (max_s is None or len(audio) <= max_s * sampling_rate),
         )
         return apply(" ".join(s.text.strip() for s in segments).strip(), cfg.get("postprocess", ["diacritics"]))
 

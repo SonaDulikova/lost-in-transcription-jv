@@ -37,6 +37,10 @@ def main() -> None:
     ap.add_argument("--patience", type=float, default=None)
     ap.add_argument("--condition-on-previous-text", action="store_true")
     ap.add_argument("--vad-filter", action="store_true")
+    ap.add_argument("--without-timestamps-max-s", type=float, default=None,
+                    help="with --without-timestamps, keep timestamps for clips longer than this")
+    ap.add_argument("--without-timestamps", action="store_true",
+                    help="decode with <|notimestamps|>, as the LoRA was trained; clips > 30 s are cut at 30 s windows")
     ap.add_argument("--no-postprocess", action="store_true", help="write raw model output; rules are applied at scoring time")
     args = ap.parse_args()
 
@@ -59,6 +63,10 @@ def main() -> None:
             cfg["condition_on_previous_text"] = True
         if args.vad_filter:
             cfg["vad_filter"] = True
+        if args.without_timestamps:
+            cfg["without_timestamps"] = True
+        if args.without_timestamps_max_s is not None:
+            cfg["without_timestamps_max_s"] = args.without_timestamps_max_s
         if args.no_postprocess:
             cfg["postprocess"] = []
         transcribe = m.build_transcriber(args.model, cfg)
@@ -78,7 +86,9 @@ def main() -> None:
     if args.backend == "ct2":
         meta.update({"temperature": args.temperature, "patience": args.patience,
                      "condition_on_previous_text": args.condition_on_previous_text,
-                     "vad_filter": args.vad_filter, "postprocess": not args.no_postprocess})
+                     "vad_filter": args.vad_filter, "without_timestamps": args.without_timestamps,
+                     "without_timestamps_max_s": args.without_timestamps_max_s,
+                     "postprocess": not args.no_postprocess})
     args.out.with_suffix(".json").write_text(json.dumps(meta, indent=2))
     print(json.dumps(meta))
 

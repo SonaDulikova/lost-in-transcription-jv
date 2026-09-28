@@ -28,7 +28,7 @@ BUDGET_S = {"decode": 600, "proxy": 2700, "full": 18000}
 DEFAULT_BASE = "openai/whisper-large-v3-turbo"
 DEFAULT_MODEL = REPO / "runs" / "ct2" / "lora_v5"
 DEFAULT_DECODE = {"language": "id", "beam": 5, "temperature": 0.0, "patience": None,
-                  "condition_on_previous_text": False, "vad_filter": False}
+                  "condition_on_previous_text": False, "vad_filter": False, "without_timestamps": False}
 UV = ["uv", "run"]
 
 PROVENANCE_FILES = ("lit/postproc.py", "scripts/train_lora.py", "lit/autoresearch.py")
@@ -248,6 +248,10 @@ def decode_cmd(model: Path, out_csv: Path, cfg: dict) -> list[str]:
         cmd.append("--condition-on-previous-text")
     if cfg.get("vad_filter"):
         cmd.append("--vad-filter")
+    if cfg.get("without_timestamps"):
+        cmd.append("--without-timestamps")
+    if cfg.get("without_timestamps_max_s") is not None:
+        cmd += ["--without-timestamps-max-s", str(cfg["without_timestamps_max_s"])]
     return cmd
 
 

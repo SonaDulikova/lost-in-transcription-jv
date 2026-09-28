@@ -57,3 +57,40 @@ def test_run_survives_transcriber_error(tmp_path: Path):
     m.run(boom, data, out)
     df = pd.read_csv(out, keep_default_na=False)
     assert df["transcript"].tolist() == [""]
+
+
+def test_transcriber_without_timestamps_only_up_to_max_seconds(tmp_path: Path, monkeypatch):
+    import sys
+    import types
+
+    import numpy as np
+
+    m = _load_main()
+    seen = {}
+    lengths = {"short.mp3": 20.0, "long.mp3": 35.0}
+
+    class FakeModel:
+        def __init__(self, *a, **kw):
+            pass
+
+        def transcribe(self, audio, **kw):
+            seen.update(kw, samples=len(audio))
+            return iter([types.SimpleNamespace(text=" ya ")]), None
+
+    fake = types.SimpleNamespace(WhisperModel=FakeModel,
+                                 decode_audio=lambda path, sampling_rate: np.zeros(int(lengths[Path(path).name] * sampling_rate)))
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake)
+
+    default = m.build_transcriber(tmp_path, m.load_config())
+    assert default(tmp_path / "short.mp3") == "ya"
+    assert seen["without_timestamps"] is False and seen["samples"] == 20 * 16000
+
+    always = m.build_transcriber(tmp_path, {**m.load_config(), "without_timestamps": True})
+    always(tmp_path / "long.mp3")
+    assert seen["without_timestamps"] is True
+
+    capped = m.build_transcriber(tmp_path, {**m.load_config(), "without_timestamps": True, "without_timestamps_max_s": 30})
+    capped(tmp_path / "short.mp3")
+    assert seen["without_timestamps"] is True
+    capped(tmp_path / "long.mp3")
+    assert seen["without_timestamps"] is False

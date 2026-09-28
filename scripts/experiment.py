@@ -37,6 +37,8 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--patience", type=float, default=None)
     d.add_argument("--condition-on-previous-text", action="store_true")
     d.add_argument("--vad-filter", action="store_true")
+    d.add_argument("--without-timestamps", action="store_true")
+    d.add_argument("--without-timestamps-max-s", type=float, default=None)
     d.add_argument("--rules", type=_rules, default=["diacritics"])
     d.add_argument("--hypothesis", default=None)
 
@@ -88,7 +90,8 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "decode":
         cfg = {"language": args.language, "beam": args.beam, "temperature": args.temperature,
                "patience": args.patience, "condition_on_previous_text": args.condition_on_previous_text,
-               "vad_filter": args.vad_filter}
+               "vad_filter": args.vad_filter, "without_timestamps": args.without_timestamps,
+               "without_timestamps_max_s": args.without_timestamps_max_s}
         run_decode(store, args.model, cfg, args.rules, args.hypothesis)
     else:
         bad = next((f for f in FORBIDDEN_TRAIN_FLAGS

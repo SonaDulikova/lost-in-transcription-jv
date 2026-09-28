@@ -129,10 +129,11 @@ def test_decode_cmd_only_passes_set_options(tmp_path: Path):
     assert cmd[:3] == ["uv", "run", "scripts/transcribe_dev.py"]
     assert "--no-postprocess" in cmd and "--convo" in cmd and "--patience" not in cmd
     assert "--vad-filter" not in cmd and "--condition-on-previous-text" not in cmd
-    cfg = {**DEFAULT_DECODE, "beam": 8, "patience": 1.5, "vad_filter": True}
+    assert "--without-timestamps" not in cmd
+    cfg = {**DEFAULT_DECODE, "beam": 8, "patience": 1.5, "vad_filter": True, "without_timestamps": True}
     cmd = decode_cmd(Path("m"), tmp_path / "d.csv", cfg)
     assert cmd[cmd.index("--beam") + 1] == "8" and cmd[cmd.index("--patience") + 1] == "1.5"
-    assert "--vad-filter" in cmd
+    assert "--vad-filter" in cmd and "--without-timestamps" in cmd
 
 
 def test_train_cmd_proxy_overrides_come_last():
