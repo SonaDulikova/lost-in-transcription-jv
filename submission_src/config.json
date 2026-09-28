@@ -6,5 +6,5 @@
   "condition_on_previous_text": false,
   "vad_filter": false,
   "temperature": 0.0,
-  "postprocess": ["diacritics"]
+  "postprocess": ["diacritics", "tail"]
 }

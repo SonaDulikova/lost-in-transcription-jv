@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import random
 from dataclasses import dataclass
@@ -20,8 +21,10 @@ from transformers import (
     EarlyStoppingCallback,
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
+    TrainerCallback,
     WhisperForConditionalGeneration,
     WhisperProcessor,
+    set_seed,
 )
 
 from lit.data import strip_diacritics
@@ -42,9 +45,10 @@ def load_manifests(paths: list[Path], max_seconds: float = 30.0, limit: int | No
     return df.reset_index(drop=True)
 
 
-def speed_perturb(y: np.ndarray, rng: random.Random) -> np.ndarray:
+def speed_perturb(y: np.ndarray, rng: random.Random, max_seconds: float = 30.0) -> np.ndarray:
     factor = rng.choice([1.0, 1.0, 0.9, 1.1])
-    if factor == 1.0:
+    # the feature extractor truncates at 30 s but the label keeps every word, so never stretch past it
+    if factor == 1.0 or len(y) / factor > max_seconds * SR:
         return y
     return librosa.resample(y, orig_sr=SR, target_sr=int(SR / factor))
 
@@ -69,6 +73,18 @@ def make_transform(processor: WhisperProcessor, augment: bool, seed: int = 0):
     return transform
 
 
+def add_lora(model: WhisperForConditionalGeneration, rank: int, scope: str, seed: int):
+    # A plain list matches by module-name suffix (every encoder and decoder block); a string is
+    # treated as a regex over the full module name, which is how a single half gets selected.
+    targets = ["q_proj", "k_proj", "v_proj", "out_proj", "fc1", "fc2"]
+    if scope != "all":
+        targets = rf".*\.{scope}\..*\.({'|'.join(targets)})"
+    lora = LoraConfig(r=rank, lora_alpha=2 * rank, lora_dropout=0.05, bias="none", target_modules=targets)
+    # the Trainer only calls set_seed in its constructor, after this, so seed the A init here
+    set_seed(seed)
+    return get_peft_model(model, lora)
+
+
 @dataclass
 class Collator:
     processor: WhisperProcessor
@@ -85,7 +101,41 @@ class Collator:
         return batch
 
 
-def main() -> None:
+class SnapshotCallback(TrainerCallback):
+    """Save the adapter alone at every 1/per_epoch epoch from from_epoch on, for checkpoint averaging.
+
+    Independent of eval and of --no-select; writes out/snapshots/step-N, which scripts/soup.py reads.
+    """
+
+    def __init__(self, out: Path, from_epoch: float, per_epoch: int = 4):
+        self.dir, self.from_epoch, self.per_epoch = Path(out) / "snapshots", from_epoch, per_epoch
+        self.steps: set[int] = set()
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        per_step = state.max_steps / (args.num_train_epochs * self.per_epoch)  # steps per snapshot
+        k0 = math.ceil(self.from_epoch * self.per_epoch)
+        k1 = math.floor(args.num_train_epochs * self.per_epoch)
+        self.steps = {int(k * per_step + 0.5) for k in range(k0, k1 + 1)} | {state.max_steps}
+
+    def on_step_end(self, args, state, control, model=None, **kwargs):
+        if state.global_step in self.steps and state.is_world_process_zero:
+            model.save_pretrained(self.dir / f"step-{state.global_step}")
+
+
+def selection(no_select: bool) -> tuple[dict, list]:
+    """Trainer kwargs and callbacks for picking the returned checkpoint.
+
+    Default: keep the best-WER epoch and stop after one epoch without improvement. With
+    --no-select the val set may be in training (the all-dev run), so train every epoch and keep
+    the last; eval still runs, for the log only.
+    """
+    if no_select:
+        return {"load_best_model_at_end": False}, []
+    return ({"load_best_model_at_end": True, "metric_for_best_model": "wer", "greater_is_better": False},
+            [EarlyStoppingCallback(early_stopping_patience=1)])
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="openai/whisper-large-v3-turbo")
     ap.add_argument("--train", type=Path, action="append", required=True)
@@ -103,12 +153,22 @@ def main() -> None:
     ap.add_argument("--train-limit", type=int, default=None, help="subsample for dry runs")
     ap.add_argument("--sample-seed", type=int, default=0, help="random_state for --train-limit subsampling")
     ap.add_argument("--seed", type=int, default=0,
-                    help="trainer seed and augmentation RNG; 0 reproduces every run before 2026-09-24")
+                    help="LoRA init, trainer and augmentation seed; runs before 2026-09-28 left the LoRA "
+                         "init unseeded and let speed 0.9 stretch clips past 30 s")
     ap.add_argument("--no-augment", action="store_true")
+    ap.add_argument("--no-select", action="store_true",
+                    help="fixed-epoch mode: no early stopping, keep the final epoch, not the best-val one")
+    ap.add_argument("--snapshot-from-epoch", type=float, default=None,
+                    help="save adapter-only snapshots to OUT/snapshots/ from this epoch on (off by default)")
+    ap.add_argument("--snapshots-per-epoch", type=int, default=4)
     ap.add_argument("--wandb-project", default=DEFAULT_WANDB_PROJECT)
     ap.add_argument("--run-name", default=None)
     ap.add_argument("--no-wandb", action="store_true", help="disable W&B logging (use for dry runs)")
-    args = ap.parse_args()
+    return ap.parse_args(argv)
+
+
+def main() -> None:
+    args = parse_args()
 
     load_dotenv()
     report_to = "none" if args.no_wandb else "wandb"
@@ -130,14 +190,7 @@ def main() -> None:
     model.generation_config.task = "transcribe"
     model.generation_config.forced_decoder_ids = None
 
-    # A plain list matches by module-name suffix (every encoder and decoder block); a string is
-    # treated as a regex over the full module name, which is how a single half gets selected.
-    targets = ["q_proj", "k_proj", "v_proj", "out_proj", "fc1", "fc2"]
-    if args.lora_scope != "all":
-        targets = rf".*\.{args.lora_scope}\..*\.({'|'.join(targets)})"
-    lora = LoraConfig(r=args.rank, lora_alpha=2 * args.rank, lora_dropout=0.05, bias="none",
-                      target_modules=targets)
-    model = get_peft_model(model, lora)
+    model = add_lora(model, rank=args.rank, scope=args.lora_scope, seed=args.seed)
     model.enable_input_require_grads()
     model.print_trainable_parameters()
 
@@ -157,6 +210,9 @@ def main() -> None:
         refs = processor.batch_decode(labels, skip_special_tokens=True)
         return {"wer": corpus_wer(refs, hyps).wer}
 
+    select_kwargs, callbacks = selection(args.no_select)
+    if args.snapshot_from_epoch is not None:
+        callbacks.append(SnapshotCallback(args.out, args.snapshot_from_epoch, args.snapshots_per_epoch))
     targs = Seq2SeqTrainingArguments(
         output_dir=str(args.out),
         per_device_train_batch_size=args.batch,
@@ -174,9 +230,7 @@ def main() -> None:
         predict_with_generate=True,
         generation_max_length=440,
         generation_num_beams=1,
-        load_best_model_at_end=True,
-        metric_for_best_model="wer",
-        greater_is_better=False,
+        **select_kwargs,
         logging_steps=25,
         remove_unused_columns=False,
         label_names=["labels"],
@@ -192,12 +246,15 @@ def main() -> None:
         eval_dataset=val_ds,
         data_collator=Collator(processor, model.config.decoder_start_token_id),
         compute_metrics=compute_metrics,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=1)],
+        callbacks=callbacks,
     )
     trainer.train()
     model.save_pretrained(args.out / "adapter")
     processor.save_pretrained(args.out / "processor")
-    print(f"saved adapter to {args.out / 'adapter'}; best eval: {trainer.state.best_metric}")
+    if args.no_select:
+        print(f"saved final-epoch adapter to {args.out / 'adapter'}")
+    else:
+        print(f"saved adapter to {args.out / 'adapter'}; best eval: {trainer.state.best_metric}")
 
 
 if __name__ == "__main__":

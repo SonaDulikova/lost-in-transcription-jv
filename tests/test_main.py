@@ -33,11 +33,12 @@ def test_run_writes_submission_in_format_order(tmp_path: Path):
     assert df["transcript"].tolist() == ["text for b.mp3", "text for a.mp3"]
 
 
-def test_default_config_postprocess_strips_diacritics_only():
+def test_default_config_postprocess_strips_diacritics_and_hallucinated_tail():
     m = _load_main()
     rules = m.load_config()["postprocess"]
-    assert rules == ["diacritics"]
+    assert rules == ["diacritics", "tail"]
     assert m.apply("Nèngdi akèh, é... ya.", rules) == "Nengdi akeh, e... ya."
+    assert m.apply("aku neng kene. Terima kasih telah menonton.", rules) == "aku neng kene."
     assert m.apply("Kalau di SMP, ya.", rules) == "Kalau di SMP, ya."
     assert m.apply("", rules) == ""
 
