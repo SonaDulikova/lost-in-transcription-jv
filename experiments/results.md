@@ -192,6 +192,34 @@ Model: uniform soup of the three all-scope v5-mix seeds (`scripts/soup.py`, exac
 | date | id | type | score | notes |
 |---|---|---|---|---|
 | 2026-09-28 | id-2992 | smoke test | 0.1435 | v5 had 0.1043 on the same smoke subset |
-| 2026-09-28 | id-3000 | full evaluation (soup s0.7) | **0.2718** (public), best stays v5's 0.2600, rank #27 | +0.0118 vs v5 (+4.5% relative) although convo 2 said -0.0194 (0.1566 vs 0.1760). Quota 3 of 3 used; next slot 2026-09-29 UTC |
+| 2026-09-28 | id-3000 | full evaluation (soup s0.7) | **0.2718** (public), best stays v5's 0.2600, rank #27 | +0.0118 vs v5 (+4.5% relative) although convo 2 said -0.0194 (0.1566 vs 0.1760). Quota 3 of 3 used; next  2026-09-29 UTC |
 
 **Convo 2 got the direction wrong for the first time.** Every earlier submission moved the leaderboard the way convo 2 predicted (v2 -4.0% dev / -6.5% test, v5 likewise). The scale-0.7 soup moved it the opposite way. Shrinking the LoRA delta toward the base is what the two signals disagree on: on 60 convo-5 clips (trained on) the same models score v5 0.1533, soup s1.0 0.1585, soup s0.7 0.1810, and the smoke subset (drawn from the training set) ranked s0.7 worse than v5 as well. The hidden test set evidently rewards full-strength adaptation: the LoRA was always worth more there than on convo 2 (zero-shot -> v5: -44.6% on the leaderboard vs -23.2% on convo 2), and convo 2's scale curve reflects one conversation, two speakers and a comparatively Indonesian-heavy mix. Conclusion: scale < 1 is dropped; convo 2 alone must not tune anything that trades Javanese adaptation against base-model behaviour, and changes of that kind need a second held-out conversation (the reverse fold, train on convo 2 / score convo 5) before they reach the leaderboard.
+
+## Smoke test of the scale-1.0 soup (2026-09-29): not sent to full evaluation
+
+Model: the same three-seed soup of t018-t020 at scale 1.0 (`runs/ct2/soup_allscope`, convo 2 0.1639 with `tail`, d007), `postprocess: ["diacritics", "tail"]`, timestamps on (zip sha256 prefix `2ca09ac5`).
+
+| date | id | type | score | notes |
+|---|---|---|---|---|
+| 2026-09-29 | id-3085 | smoke test | 0.1261 | v5 0.1043, soup s0.7 0.1435 on the same smoke subset |
+
+**Not sent to full evaluation.** The smoke subset has ranked all four earlier submissions in the same order as the full test (zero-shot, v2, soup s0.7, v5), including submission 1, where convo 2 got the direction wrong. Scaling today's smoke gap by how s0.7's gap carried over predicts about 0.266 on the full test, worse than v5's 0.2600. The final ranking uses the best submission, so the unused  is kept for a candidate that beats v5 on smoke.
+
+Reading: averaging seeds partly cancels each seed's delta, so a soup acts like a milder scale < 1. The order v5 < s1.0 < s0.7 on smoke, on convo 5 and on the full test (where measured) fits "more shrinkage toward the base, worse test score". Next candidates, both smoke-tested before any full evaluation: the 5-seed all-dev soup, and one single all-dev model at full strength. Caveat: the smoke subset is drawn from the dev data, so a model trained on those clips gets an optimistic smoke score.
+
+## All-dev candidates on the smoke subset (2026-09-29)
+
+All-dev = all-scope r32, v5 mix + convo 2, `--no-select --epochs 2`, fixed code (step 6); `diacritics,tail`, timestamps on.
+
+| date | id | type | score | notes |
+|---|---|---|---|---|
+| 2026-09-29 | id-3104 | smoke test | 0.1217 | 5-seed all-dev soup t034/t035/t036/t041/t042 (zip `c8199674`) |
+| 2026-09-29 | id-3108 | smoke test | 0.1348 | single all-dev model t034, seed 0 (zip `0cd3fb36`) |
+
+Smoke ranking so far: v5 0.1043 < all-dev soup 0.1217 < soup s1.0 0.1261 < all-dev single 0.1348 < soup s0.7 0.1435. The single model is worse than the soup, so "soups shrink the delta and shrinking loses" does not explain v5's lead.
+
+**lora_v5 is the same recipe as t018:** the same code (later commits only added flags whose defaults reproduce it), the same mix, all-scope, seed 0, 3 epochs with best-epoch selection. The one difference is the LoRA init, which was unseeded before the step-6 fix. v5's smoke and test lead is most likely a lucky draw of that recipe, not a better recipe.
+| 2026-09-29 | id-3110 | full evaluation (5-seed all-dev soup) | **0.2567** (public), **new best**, rank #25 | -0.0033 vs v5's 0.2600 (-1.3% relative). Quota 3 of 3 used; next slot Sep 30 UTC |
+
+**The all-dev soup beat v5, and the smoke subset got the direction wrong.** Smoke ranked it 0.1217 against v5's 0.1043; the full test ranked it 0.2567 against 0.2600. The smoke subset probably favours models that fit convo 5 closely, so it is no longer used to screen candidates. What the result supports: more in-domain speakers (convo 2) plus seed averaging beat the lucky single seed, in line with every earlier real gain coming from data.
