@@ -39,7 +39,7 @@ DEFAULT_WANDB_PROJECT = "lost-in-transcription-jv"
 def load_manifests(paths: list[Path], max_seconds: float = 30.0, limit: int | None = None, seed: int = 0) -> pd.DataFrame:
     df = pd.concat([pd.read_csv(p, keep_default_na=False) for p in paths], ignore_index=True)
     df = df[(df["duration"] <= max_seconds) & (df["text"].str.strip() != "")]
-    # Jember writes è/é heavily, dev references almost never do; the scorer keeps diacritics as-is
+    # dev references almost never use è/é and the scorer keeps diacritics as-is
     df["text"] = df["text"].map(strip_diacritics)
     if limit:
         df = df.sample(n=min(limit, len(df)), random_state=seed)
@@ -153,13 +153,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--accum", type=int, default=8)
     ap.add_argument("--rank", type=int, default=32)
     ap.add_argument("--lora-scope", default="all", choices=["all", "decoder", "encoder"],
-                    help="which half of the model LoRA adapts; 'all' is the historical default")
+                    help="which half of the model LoRA adapts")
     ap.add_argument("--val-limit", type=int, default=150)
     ap.add_argument("--train-limit", type=int, default=None, help="subsample for dry runs")
     ap.add_argument("--sample-seed", type=int, default=0, help="random_state for --train-limit subsampling")
     ap.add_argument("--seed", type=int, default=0,
-                    help="LoRA init, trainer and augmentation seed; runs before 2026-09-28 left the LoRA "
-                         "init unseeded and let speed 0.9 stretch clips past 30 s")
+                    help="LoRA init, trainer and augmentation seed")
     ap.add_argument("--no-augment", action="store_true")
     ap.add_argument("--augment-acoustic", action="store_true",
                     help="mp3/babble/reverb/gain/band-pass on 60%% of training clips (lit/augment.py)")

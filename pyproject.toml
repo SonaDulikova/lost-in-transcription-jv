@@ -23,9 +23,6 @@ dependencies = [
     "python-dotenv>=1.0",
 ]
 
-[project.optional-dependencies]
-qwen = ["qwen-asr"]
-
 [dependency-groups]
 dev = [
     "num2words>=0.5.14",
