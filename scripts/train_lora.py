@@ -27,6 +27,7 @@ from transformers import (
     set_seed,
 )
 
+from lit.augment import AcousticAugment
 from lit.data import strip_diacritics
 from lit.wer import corpus_wer
 
@@ -53,7 +54,7 @@ def speed_perturb(y: np.ndarray, rng: random.Random, max_seconds: float = 30.0) 
     return librosa.resample(y, orig_sr=SR, target_sr=int(SR / factor))
 
 
-def make_transform(processor: WhisperProcessor, augment: bool, seed: int = 0):
+def make_transform(processor: WhisperProcessor, augment: bool, seed: int = 0, acoustic=None):
     rng = random.Random(seed)
 
     def transform(batch):
@@ -66,6 +67,8 @@ def make_transform(processor: WhisperProcessor, augment: bool, seed: int = 0):
                 y = librosa.resample(y, orig_sr=sr, target_sr=SR)
             if augment:
                 y = speed_perturb(y, rng)
+            if acoustic is not None:
+                y = acoustic(y)
             feats.append(processor.feature_extractor(y, sampling_rate=SR).input_features[0])
             labels.append(processor.tokenizer(text).input_ids)
         return {"input_features": feats, "labels": labels}
@@ -158,6 +161,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="LoRA init, trainer and augmentation seed; runs before 2026-09-28 left the LoRA "
                          "init unseeded and let speed 0.9 stretch clips past 30 s")
     ap.add_argument("--no-augment", action="store_true")
+    ap.add_argument("--augment-acoustic", action="store_true",
+                    help="mp3/babble/reverb/gain/band-pass on 60%% of training clips (lit/augment.py)")
     ap.add_argument("--no-select", action="store_true",
                     help="fixed-epoch mode: no early stopping, keep the final epoch, not the best-val one")
     ap.add_argument("--snapshot-from-epoch", type=float, default=None,
@@ -201,7 +206,15 @@ def main() -> None:
     print(f"train {len(train_df)} chunks ({train_df['duration'].sum() / 3600:.2f} h), val {len(val_df)}")
     train_ds = Dataset.from_pandas(train_df[["path", "text"]])
     val_ds = Dataset.from_pandas(val_df[["path", "text"]])
-    train_ds.set_transform(make_transform(processor, augment=not args.no_augment, seed=args.seed))
+    acoustic = None
+    if args.augment_acoustic:
+        # babble = other training clips, so no external data; a 200-clip pool is plenty of variety
+        pool_paths = train_df["path"].sample(n=min(200, len(train_df)), random_state=args.seed)
+        pool = [sf.read(p, dtype="float32")[0] for p in pool_paths]
+        pool = [y.mean(axis=1) if y.ndim > 1 else y for y in pool]
+        acoustic = AcousticAugment(pool, p=0.6, seed=args.seed)
+        print(f"acoustic augmentation on, babble pool {len(pool)} clips")
+    train_ds.set_transform(make_transform(processor, augment=not args.no_augment, seed=args.seed, acoustic=acoustic))
     val_ds.set_transform(make_transform(processor, augment=False))
 
     def compute_metrics(pred):

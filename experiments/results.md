@@ -223,3 +223,27 @@ Smoke ranking so far: v5 0.1043 < all-dev soup 0.1217 < soup s1.0 0.1261 < all-d
 | 2026-09-29 | id-3110 | full evaluation (5-seed all-dev soup) | **0.2567** (public), **new best**, rank #25 | -0.0033 vs v5's 0.2600 (-1.3% relative). Quota 3 of 3 used; next slot Sep 30 UTC |
 
 **The all-dev soup beat v5, and the smoke subset got the direction wrong.** Smoke ranked it 0.1217 against v5's 0.1043; the full test ranked it 0.2567 against 0.2600. The smoke subset probably favours models that fit convo 5 closely, so it is no longer used to screen candidates. What the result supports: more in-domain speakers (convo 2) plus seed averaging beat the lucky single seed, in line with every earlier real gain coming from data.
+
+## Last submission candidates (2026-10-01): acoustic augmentation passed its gate
+
+**omniASR check (Sep 30, zero-shot on convo 2, honest):** CTC_1B_v2 0.4213 (p011), LLM_1B_v2 `jav_Latn` 0.2570 (p013), LLM_3B_v2 does not fit the laptop. Both outputs are lowercase without punctuation. Far from the 0.14 bar; dropped. `scripts/transcribe_omni.py`.
+
+**Acoustic augmentation** (`lit/augment.py`, `--augment-acoustic`): with p = 0.6, 1–3 of MP3 re-encode 16–64 kbps, babble from other training clips at 5–20 dB SNR, synthetic reverb RT60 0.2–0.8 s, gain ±6 dB, band-pass 300–3400 Hz. Motivation: test WER is about 1.5× dev WER, dev clips are 64 kbps MP3 voice notes, and the Central Javanese corpus is clean WAV. Noisy convo 2 for the gate: `scripts/make_noisy_dev.py` (babble 5–15 dB + MP3 16–32 kbps, seed 0).
+
+**Gate (all-scope v5 mix + 34 convo-5 long pieces, seed 0, 3 epochs with selection; neither run sees convo 2; `diacritics,tail`):**
+
+| run | clean convo 2 | noisy convo 2 |
+|---|---|---|
+| t046 control | 0.1670 | 0.5711 |
+| t047 + augmentation | 0.1654 | **0.4218** |
+
+Passed: noisy −0.149 (need > 0.01), clean −0.0017 (allowed up to +0.005).
+
+**All-dev + long clips** (`scripts/split_long_clips.py`: 27 of 37 > 30 s dev clips recovered as 54 verified pieces, +14 min): seeds t043/t044/t045 = 0.1271/0.1316/0.1277 (contaminated). **+ augmentation:** t048/t049/t050 = 0.1375/0.1367/0.1367 (contaminated).
+
+| soup (scale 1.0, `diacritics,tail`, timestamps on) | clean convo 2 (contaminated) | noisy convo 2 | zip |
+|---|---|---|---|
+| `soup_alldev_long` t043–t045 (safe) | 0.1265 (d020) | 0.5416 | `submission_alldev_long_04c70d99.zip` |
+| **`soup_alldev_long_aug` t048–t050 (final)** | 0.1367 (d019) | **0.3802** | `submission_alldev_long_aug_4ba9721b.zip` |
+
+The clean contaminated number favours the safe soup by 0.01, but it mostly measures memorisation of convo 2; the honest gate says augmentation is neutral on clean audio and far better on degraded audio. Decision rule fixed on Sep 29: augmented soup if the gate passes. Both zips: `model.bin` byte-identical to the CT2 model, GPU 10-clip round-trip 10/10 identical, `pack.sh` check passed.

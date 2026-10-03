@@ -170,6 +170,36 @@ def test_snapshot_flags_default_off():
     assert args.snapshot_from_epoch == 2.0 and args.snapshots_per_epoch == 2
 
 
+def test_augment_acoustic_flag_defaults_off():
+    base = ["--train", "a.csv", "--val", "b.csv", "--out", "o"]
+    assert tl.parse_args(base).augment_acoustic is False
+    assert tl.parse_args(base + ["--augment-acoustic"]).augment_acoustic is True
+
+
+def test_transform_applies_the_acoustic_augment(tmp_path):
+    import soundfile as sf
+
+    y = np.zeros(tl.SR, dtype=np.float32)
+    y[::100] = 0.5  # clicks, so an mp3/reverb/babble change is visible
+    sf.write(tmp_path / "a.wav", y, tl.SR)
+    seen = []
+
+    class Spy:
+        def __call__(self, arr):
+            seen.append(arr.copy())
+            return arr * 0.5
+
+    from types import SimpleNamespace
+
+    processor = SimpleNamespace(
+        feature_extractor=lambda arr, sampling_rate: SimpleNamespace(input_features=[arr]),
+        tokenizer=lambda text: SimpleNamespace(input_ids=[1]),
+    )
+    transform = tl.make_transform(processor, augment=False, acoustic=Spy())
+    out = transform({"path": [str(tmp_path / "a.wav")], "text": ["x"]})
+    assert len(seen) == 1 and np.allclose(out["input_features"][0], seen[0] * 0.5)
+
+
 def test_skipping_the_slow_down_still_consumes_one_draw():
     # the factor sequence for every other clip must not shift when one long clip is skipped
     rng = FixedChoice(0.9)
